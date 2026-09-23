@@ -1,0 +1,44 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "be38a061f8e91edc122e790f92bc2d96"
+name = "BadgeFlow"
+application_url = "https://example.com"
+embedded = true
+
+[access_scopes]
+# read_products: badge targeting (products/collections). read_themes: setup
+# checker confirms the app embed block is on. No write scopes for V1 — keeps
+# App Store review simple, per the product brief.
+scopes = "read_products,read_themes"
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  # Mandatory GDPR compliance webhooks — required for every public app.
+  # These use `compliance_topics`, not `topics` (that field is for regular
+  # event webhooks only).
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+automatically_update_urls_on_dev = true

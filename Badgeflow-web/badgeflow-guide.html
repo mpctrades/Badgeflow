@@ -5,6 +5,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>BadgeFlow — Merchant guide</title>
+  <meta name="theme-color" content="#ffffff" id="themeColorMeta">
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%201200%201200%22%3E%3Crect%20width%3D%221200%22%20height%3D%221200%22%20rx%3D%22220%22%20fill%3D%22%235B4FE0%22%2F%3E%3Cg%20transform%3D%22translate%28600%2C600%29%20rotate%28-16%29%22%3E%3Cpath%20d%3D%22M%20-330%200%20L%20-170%20-175%20Q%20-150%20-195%20-122%20-195%20L%20250%20-195%20Q%20290%20-195%20290%20-155%20L%20290%20155%20Q%20290%20195%20250%20195%20L%20-122%20195%20Q%20-150%20195%20-170%20175%20Z%22%20fill%3D%22%23FFFFFF%22%2F%3E%3Ccircle%20cx%3D%22-118%22%20cy%3D%220%22%20r%3D%2254%22%20fill%3D%22%235B4FE0%22%2F%3E%3Cpath%20d%3D%22M%20-40%2060%20Q%2090%20-40%20260%20-60%22%20fill%3D%22none%22%20stroke%3D%22%238F86F0%22%20stroke-width%3D%2234%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.95%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('bf-theme') === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      } catch (e) { }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -30,22 +42,6 @@
       color-scheme: light;
     }
 
-    @media (prefers-color-scheme:dark) {
-      :root:not([data-theme="light"]) {
-        --paper: #10131B;
-        --liner: #171B25;
-        --ink: #ECEFF5;
-        --ink-soft: #98A2B8;
-        --rule: #262C3A;
-        --sale: #FF5C48;
-        --gold: #F4B63C;
-        --live: #33BD98;
-        --sched: #7398F7;
-        --shadow: 0 1px 0 rgba(0, 0, 0, .4), 0 10px 28px -16px rgba(0, 0, 0, .9);
-        color-scheme: dark;
-      }
-    }
-
     :root[data-theme="dark"] {
       --paper: #10131B;
       --liner: #171B25;
@@ -64,6 +60,47 @@
     *::before,
     *::after {
       box-sizing: inherit
+    }
+
+    /* smooth cross-fade when the theme switches */
+    body,
+    .topbar,
+    .demo,
+    .demo .head,
+    .pcard,
+    .plan,
+    .note,
+    footer,
+    table,
+    th,
+    td,
+    details,
+    code,
+    nav.toc li,
+    .themeToggle .track,
+    .themeToggle .thumb,
+    .state,
+    .anchors button {
+      transition: background-color .35s ease, color .35s ease, border-color .35s ease, box-shadow .35s ease;
+    }
+
+    /* ---------- premium accent bar ---------- */
+    .accentbar {
+      position: fixed;
+      top: env(safe-area-inset-top, 0px);
+      left: 0;
+      right: 0;
+      height: 3px;
+      z-index: 50;
+      background: linear-gradient(90deg, var(--sale), var(--gold), var(--live), var(--sched), var(--sale));
+      background-size: 200% 100%;
+      animation: accentflow 9s linear infinite;
+    }
+
+    @keyframes accentflow {
+      to {
+        background-position: -200% 0
+      }
     }
 
     html {
@@ -186,6 +223,25 @@
       letter-spacing: .01em;
     }
 
+    .logomark {
+      flex: 0 0 auto;
+      display: block;
+      filter: drop-shadow(0 3px 8px rgba(91, 79, 224, .35));
+      animation: logoPop .6s cubic-bezier(.2, 1.2, .3, 1) both;
+    }
+
+    @keyframes logoPop {
+      from {
+        opacity: 0;
+        transform: scale(.55) rotate(-20deg)
+      }
+
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
     .topbar .where {
       font-family: var(--sans);
       font-size: 14px;
@@ -197,19 +253,62 @@
       flex: 1
     }
 
-    .ghost {
-      font-family: var(--sans);
-      font-size: 13.5px;
-      font-weight: 600;
-      border: 1px solid var(--rule);
+    /* ---------- theme toggle ---------- */
+    .themeToggle {
+      flex: 0 0 auto;
+      border: 0;
       background: transparent;
-      color: var(--ink);
-      padding: 7px 12px;
-      border-radius: 8px;
+      padding: 2px;
       cursor: pointer;
+      border-radius: 999px;
     }
 
-    .ghost:hover {
+    .themeToggle .track {
+      width: 46px;
+      height: 26px;
+      border-radius: 999px;
+      background: var(--liner);
+      border: 1px solid var(--rule);
+      display: flex;
+      align-items: center;
+      padding: 2px;
+    }
+
+    .themeToggle .thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      display: grid;
+      place-items: center;
+      color: var(--gold);
+      transform: translateX(0);
+      transition: transform .35s cubic-bezier(.2, .9, .25, 1), color .35s ease, background-color .35s ease;
+    }
+
+    .themeToggle[aria-pressed="true"] .track {
+      background: color-mix(in srgb, var(--sched) 18%, var(--liner));
+    }
+
+    .themeToggle[aria-pressed="true"] .thumb {
+      transform: translateX(20px);
+      color: var(--sched);
+    }
+
+    .themeToggle .i-moon {
+      display: none
+    }
+
+    .themeToggle[aria-pressed="true"] .i-sun {
+      display: none
+    }
+
+    .themeToggle[aria-pressed="true"] .i-moon {
+      display: block
+    }
+
+    .themeToggle:hover .track {
       border-color: var(--ink-soft)
     }
 
@@ -255,6 +354,12 @@
       background: var(--paper);
       box-shadow: var(--shadow);
       overflow: hidden;
+      transition: box-shadow .3s ease, transform .3s ease, border-color .3s ease, background-color .35s ease;
+    }
+
+    .demo:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 1px 0 rgba(22, 28, 46, .06), 0 20px 44px -18px rgba(22, 28, 46, .4);
     }
 
     .demo .head {
@@ -527,6 +632,50 @@
       margin: 0 0 7px
     }
 
+    /* ---------- scroll reveal ---------- */
+    .reveal {
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity .6s cubic-bezier(.2, .8, .2, 1), transform .6s cubic-bezier(.2, .8, .2, 1);
+    }
+
+    .reveal.in {
+      opacity: 1;
+      transform: none;
+    }
+
+    .grid2>.plan {
+      opacity: 0;
+      transform: translateY(14px);
+      transition: opacity .55s ease, transform .55s ease, box-shadow .25s ease, border-color .25s ease;
+    }
+
+    .grid2.in>.plan {
+      opacity: 1;
+      transform: none;
+    }
+
+    .grid2.in>.plan:nth-child(1) {
+      transition-delay: .05s
+    }
+
+    .grid2.in>.plan:nth-child(2) {
+      transition-delay: .15s
+    }
+
+    .grid2.in>.plan:nth-child(3) {
+      transition-delay: .25s
+    }
+
+    .grid2.in>.plan:nth-child(4) {
+      transition-delay: .35s
+    }
+
+    .plan:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow);
+    }
+
     /* stepped flow */
     .flow {
       list-style: none;
@@ -541,6 +690,30 @@
       padding: 0 0 22px 46px;
       margin: 0;
       border-left: 1px solid var(--rule);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity .5s ease, transform .5s ease;
+    }
+
+    .flow.in>li {
+      opacity: 1;
+      transform: none;
+    }
+
+    .flow.in>li:nth-child(1) {
+      transition-delay: .05s
+    }
+
+    .flow.in>li:nth-child(2) {
+      transition-delay: .15s
+    }
+
+    .flow.in>li:nth-child(3) {
+      transition-delay: .25s
+    }
+
+    .flow.in>li:nth-child(4) {
+      transition-delay: .35s
     }
 
     .flow>li:last-child {
@@ -705,7 +878,8 @@
       border: 1px solid var(--rule);
       border-radius: 12px;
       padding: 16px;
-      font-size: 15px
+      font-size: 15px;
+      transition: transform .25s cubic-bezier(.2, .8, .2, 1), box-shadow .25s ease, border-color .35s ease, background-color .35s ease;
     }
 
     .plan.hi {
@@ -784,11 +958,40 @@
 
 <body>
 
+  <div class="accentbar" aria-hidden="true"></div>
+
   <header class="topbar">
-    <span class="mark">BadgeFlow <span class="chip">guide</span></span>
+    <span class="mark">
+      <svg class="logomark" width="26" height="26" viewBox="0 0 1200 1200" aria-hidden="true">
+        <rect width="1200" height="1200" rx="220" fill="#5B4FE0" />
+        <g transform="translate(600,600) rotate(-16)">
+          <path
+            d="M -330 0 L -170 -175 Q -150 -195 -122 -195 L 250 -195 Q 290 -195 290 -155 L 290 155 Q 290 195 250 195 L -122 195 Q -150 195 -170 175 Z"
+            fill="#FFFFFF" />
+          <circle cx="-118" cy="0" r="54" fill="#5B4FE0" />
+          <path d="M -40 60 Q 90 -40 260 -60" fill="none" stroke="#8F86F0" stroke-width="34"
+            stroke-linecap="round" opacity="0.95" />
+        </g>
+      </svg>
+      BadgeFlow <span class="chip">guide</span>
+    </span>
     <span class="where">for Shopify merchants</span>
     <span class="spacer"></span>
-    <button class="ghost" id="themeBtn" type="button">Dark</button>
+    <button class="themeToggle" id="themeBtn" type="button" aria-pressed="false" aria-label="Switch to dark mode">
+      <span class="track">
+        <span class="thumb">
+          <svg class="i-sun" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.6" fill="currentColor" />
+            <g stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5 5l2.1 2.1M16.9 16.9L19 19M19 5l-2.1 2.1M7.1 16.9L5 19" />
+            </g>
+          </svg>
+          <svg class="i-moon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+            <path d="M20 14.6A8.3 8.3 0 1 1 9.4 4a6.6 6.6 0 0 0 10.6 10.6z" fill="currentColor" />
+          </svg>
+        </span>
+      </span>
+    </button>
   </header>
 
   <div class="hero">
@@ -1449,17 +1652,38 @@
 
   <script>
     (function () {
-      // theme toggle
+      // theme toggle — defaults to light on first visit; the merchant's choice is remembered
       var btn = document.getElementById('themeBtn');
+      var metaColor = document.getElementById('themeColorMeta');
       function cur() {
-        var a = document.documentElement.getAttribute('data-theme'); if (a) return a;
-        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
       }
-      function paint() { btn.textContent = cur() === 'dark' ? 'Light' : 'Dark'; }
+      function paint() {
+        var dark = cur() === 'dark';
+        btn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+        btn.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+        if (metaColor) metaColor.setAttribute('content', dark ? '#10131B' : '#ffffff');
+      }
       btn.addEventListener('click', function () {
-        document.documentElement.setAttribute('data-theme', cur() === 'dark' ? 'light' : 'dark'); paint();
+        var next = cur() === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        try { localStorage.setItem('bf-theme', next); } catch (e) { }
+        paint();
       });
       paint();
+
+      // scroll reveal
+      var revealEls = [].slice.call(document.querySelectorAll('.hero, section, ol.flow, .grid2'));
+      if ('IntersectionObserver' in window) {
+        var ro = new IntersectionObserver(function (entries) {
+          entries.forEach(function (en) {
+            if (en.isIntersecting) { en.target.classList.add('in'); ro.unobserve(en.target); }
+          });
+        }, { threshold: .12, rootMargin: '0px 0px -8% 0px' });
+        revealEls.forEach(function (el) { el.classList.add('reveal'); ro.observe(el); });
+      } else {
+        revealEls.forEach(function (el) { el.classList.add('reveal', 'in'); });
+      }
 
       // anchors
       var map = [['top', 'left'], ['top', 'center'], ['top', 'right'],

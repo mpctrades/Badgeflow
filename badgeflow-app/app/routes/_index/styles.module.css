@@ -1,0 +1,127 @@
+/* Brand color mirrors BRAND in app/lib/campaign.ts — keep in sync if that changes. */
+.index {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  min-height: 100vh;
+  text-align: center;
+  padding: 2rem 1rem;
+  background: #FAFAF9;
+}
+
+.mark {
+  font-weight: 800;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  color: #5B4FE0;
+  padding: 0;
+  margin: 0;
+}
+
+.heading,
+.text {
+  padding: 0;
+  margin: 0;
+}
+
+.heading {
+  font-size: 2rem;
+  line-height: 1.2;
+  max-width: 32rem;
+}
+
+.text {
+  font-size: 1.1rem;
+  color: #6B7177;
+  padding-bottom: 0.5rem;
+  max-width: 30rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.content {
+  display: grid;
+  gap: 1.25rem;
+  max-width: 40rem;
+}
+
+.form {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  margin: 0.5rem auto 0;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.label {
+  display: grid;
+  gap: 0.35rem;
+  width: 18rem;
+  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #2B2620;
+}
+
+.input {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #E3E2DB;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.input:focus {
+  outline: 2px solid #5B4FE0;
+  outline-offset: 1px;
+}
+
+.button {
+  padding: 0.6rem 1.1rem;
+  border: none;
+  border-radius: 8px;
+  background: #5B4FE0;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: #4A3FC7;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  padding-top: 2rem;
+  margin: 0;
+  display: flex;
+  gap: 2rem;
+  text-align: left;
+  border-top: 1px solid #ECEEEC;
+}
+
+.list > li {
+  max-width: 16rem;
+  font-size: 0.9rem;
+  color: #2B2620;
+}
+
+.list > li strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+@media only screen and (max-width: 50rem) {
+  .list {
+    display: block;
+  }
+
+  .list > li {
+    max-width: none;
+    padding-bottom: 1rem;
+  }
+}
