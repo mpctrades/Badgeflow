@@ -2,7 +2,7 @@
 
 client_id = "be38a061f8e91edc122e790f92bc2d96"
 name = "BadgeFlow"
-application_url = "https://example.com"
+application_url = "https://dev.badgeflow.mpctrades.com"
 embedded = true
 
 [access_scopes]
@@ -38,7 +38,7 @@ api_version = "2026-10"
   compliance_topics = [ "shop/redact" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://dev.badgeflow.mpctrades.com/auth/callback", "https://dev.badgeflow.mpctrades.com/auth/shopify/callback", "https://dev.badgeflow.mpctrades.com/api/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true

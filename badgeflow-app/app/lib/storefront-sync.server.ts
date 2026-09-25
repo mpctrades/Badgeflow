@@ -1,0 +1,164 @@
+// Publishes the shop's live and upcoming campaigns to the storefront. The
+// theme app embed (extensions/badgeflow-badges) reads this app-owned
+// metafield via `app.metafields.badgeflow.config` — no product scopes or
+// theme code needed. Scheduling is enforced in the browser, so a campaign
+// starts and ends on time even if nothing is re-synced.
+import db from "../db.server";
+import { displayStatus } from "./campaign";
+
+type AdminGraphqlClient = { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
+
+// Keeps the metafield well under Shopify's JSON size limit.
+const MAX_HANDLES_PER_CAMPAIGN = 250;
+
+export type StorefrontCampaign = {
+  id: string;
+  text: string;
+  color: string;
+  position: string;
+  size: number;
+  mobilePosition: string | null;
+  mobileSize: number | null;
+  startAt: string;
+  endAt: string | null;
+  createdAt: string;
+  all: boolean;
+  handles: string[];
+};
+
+async function collectionHandles(admin: AdminGraphqlClient, collectionId: string): Promise<string[]> {
+  const response = await admin.graphql(
+    `#graphql
+      query BadgeFlowCollectionHandles($id: ID!, $first: Int!) {
+        collection(id: $id) { products(first: $first) { nodes { handle } } }
+      }`,
+    { variables: { id: collectionId, first: MAX_HANDLES_PER_CAMPAIGN } },
+  );
+  const json = await response.json();
+  const nodes: { handle: string }[] = json?.data?.collection?.products?.nodes ?? [];
+  return nodes.map((n) => n.handle.toLowerCase());
+}
+
+export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: string) {
+  const [settings, campaigns] = await Promise.all([
+    db.shopSettings.upsert({ where: { shop }, update: {}, create: { shop } }),
+    db.campaign.findMany({ where: { shop, isDraft: false }, orderBy: { createdAt: "desc" } }),
+  ]);
+
+  const upcoming = campaigns.filter((c) => {
+    const status = displayStatus(c);
+    return status === "live" || status === "scheduled";
+  });
+
+  const published: StorefrontCampaign[] = await Promise.all(
+    upcoming.map(async (c) => {
+      const all = c.targetType === "all";
+      let handles: string[] = [];
+      if (c.targetType === "products") {
+        handles = c.targetRef.split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+      } else if (c.targetType === "collection" && c.targetRef) {
+        handles = await collectionHandles(admin, c.targetRef);
+      }
+      return {
+        id: c.id,
+        text: c.badgeText,
+        color: c.badgeColor,
+        position: c.position,
+        size: c.size,
+        mobilePosition: c.mobilePosition,
+        mobileSize: c.mobileSize,
+        startAt: c.startAt.toISOString(),
+        endAt: c.endAt ? c.endAt.toISOString() : null,
+        createdAt: c.createdAt.toISOString(),
+        all,
+        handles: handles.slice(0, MAX_HANDLES_PER_CAMPAIGN),
+      };
+    }),
+  );
+
+  return {
+    version: 1,
+    enabled: settings.appEnabled,
+    rules: {
+      hideSoldOut: settings.hideSoldOut,
+      oneBadgePerProduct: settings.oneBadgePerProduct,
+      shrinkOnMobile: settings.shrinkOnMobile,
+    },
+    campaigns: published,
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+// Never throws: a failed sync must not break saving a campaign or settings.
+// Returns whether the storefront is up to date so callers can warn if not.
+export async function syncStorefront(admin: AdminGraphqlClient, shop: string): Promise<boolean> {
+  try {
+    const config = await buildStorefrontConfig(admin, shop);
+
+    const installation = await admin.graphql(`#graphql
+      query BadgeFlowInstallation { currentAppInstallation { id } }`);
+    const ownerId: string | undefined = (await installation.json())?.data?.currentAppInstallation?.id;
+    if (!ownerId) throw new Error("No app installation id");
+
+    const response = await admin.graphql(
+      `#graphql
+        mutation BadgeFlowSyncStorefront($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            userErrors { field message }
+          }
+        }`,
+      {
+        variables: {
+          metafields: [{ ownerId, namespace: "badgeflow", key: "config", type: "json", value: JSON.stringify(config) }],
+        },
+      },
+    );
+    const errors = (await response.json())?.data?.metafieldsSet?.userErrors ?? [];
+    if (errors.length) throw new Error(errors.map((e: { message: string }) => e.message).join("; "));
+    return true;
+  } catch (error) {
+    console.error(`[BadgeFlow] storefront sync failed for ${shop}:`, error);
+    return false;
+  }
+}
+
+export const EMBED_HANDLE = "badgeflow-embed";
+
+// Deep link that opens the live theme's editor with the BadgeFlow embed
+// switched on, ready for the merchant to save.
+export function themeEditorEmbedLink(apiKey: string): string {
+  return `shopify:admin/themes/current/editor?context=apps&activateAppId=${apiKey}/${EMBED_HANDLE}`;
+}
+
+export type EmbedStatus = { enabled: boolean; themeName: string | null; checked: boolean };
+
+// Reads the main theme's settings_data.json (read_themes scope) to see
+// whether the BadgeFlow app embed is present and not disabled.
+export async function fetchEmbedStatus(admin: AdminGraphqlClient): Promise<EmbedStatus> {
+  try {
+    const response = await admin.graphql(`#graphql
+      query BadgeFlowEmbedStatus {
+        themes(first: 1, roles: [MAIN]) {
+          nodes {
+            name
+            files(filenames: ["config/settings_data.json"], first: 1) {
+              nodes { body { ... on OnlineStoreThemeFileBodyText { content } } }
+            }
+          }
+        }
+      }`);
+    const theme = (await response.json())?.data?.themes?.nodes?.[0];
+    if (!theme) return { enabled: false, themeName: null, checked: false };
+    const raw: string = theme.files?.nodes?.[0]?.body?.content ?? "";
+    // settings_data.json often starts with a /* ... */ comment header.
+    const data = JSON.parse(raw.replace(/^\s*\/\*[\s\S]*?\*\//, "") || "{}");
+    const blocks: Record<string, { type?: string; disabled?: boolean }> = data?.current?.blocks ?? {};
+    const enabled = Object.values(blocks).some(
+      (b) => typeof b?.type === "string" && b.type.includes(`/blocks/${EMBED_HANDLE}/`) && b.disabled !== true,
+    );
+    return { enabled, themeName: theme.name ?? null, checked: true };
+  } catch (error) {
+    console.error("[BadgeFlow] embed status check failed:", error);
+    return { enabled: false, themeName: null, checked: false };
+  }
+}

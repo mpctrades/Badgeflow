@@ -1,7 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, Form, useLoaderData } from "react-router";
 
-import { login } from "../../shopify.server";
 
 import styles from "./styles.module.css";
 
@@ -12,7 +11,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
+  // App Store requirement 2.3.1: installs start from Shopify, so never ask
+  // merchants to type their myshopify.com domain here.
+  return { showForm: false };
 };
 
 const FEATURES = [
@@ -43,10 +44,15 @@ export default function App() {
             </button>
           </Form>
         )}
+        <p className={styles.note}>
+          BadgeFlow runs inside your Shopify admin. Install it from the Shopify App Store, then open it from{" "}
+          <strong>Apps → BadgeFlow</strong>.
+        </p>
         <ul className={styles.list}>
           {FEATURES.map((f) => (
             <li key={f.title}>
-              <strong>{f.title}</strong>. {f.detail}
+              <strong>{f.title}</strong>
+              {f.detail}
             </li>
           ))}
         </ul>

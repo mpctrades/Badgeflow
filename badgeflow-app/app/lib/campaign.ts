@@ -88,7 +88,8 @@ export function setupSteps(opts: { embedConfirmed: boolean; hasCampaign: boolean
       key: "storefront",
       label: "Check your storefront",
       description: "Open the storefront preview to see a badge on a real product card.",
-      done: opts.hasCampaign, // best available signal without a real page-view check
+      // Only true once badges can actually render: embed on + a campaign.
+      done: opts.hasCampaign && opts.embedConfirmed,
       href: "/app/campaigns",
     },
   ];

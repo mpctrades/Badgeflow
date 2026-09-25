@@ -34,7 +34,7 @@ export async function fetchCollections(admin: AdminGraphqlClient, first = 8): Pr
   }));
 }
 
-export type PreviewProduct = { id: string; title: string; price: string; currency: string; imageUrl: string | null };
+export type PreviewProduct = { id: string; handle: string; title: string; price: string; currency: string; imageUrl: string | null };
 
 export async function fetchPreviewProducts(admin: AdminGraphqlClient, first = 3): Promise<PreviewProduct[]> {
   const response = await admin.graphql(
@@ -44,6 +44,7 @@ export async function fetchPreviewProducts(admin: AdminGraphqlClient, first = 3)
           edges {
             node {
               id
+              handle
               title
               featuredImage { url(transform: {maxWidth: 300, maxHeight: 300}) }
               priceRangeV2 { minVariantPrice { amount currencyCode } }
@@ -57,6 +58,7 @@ export async function fetchPreviewProducts(admin: AdminGraphqlClient, first = 3)
   type Edge = {
     node: {
       id: string;
+      handle: string;
       title: string;
       featuredImage?: { url: string };
       priceRangeV2?: { minVariantPrice?: { amount: string; currencyCode: string } };
@@ -65,6 +67,7 @@ export async function fetchPreviewProducts(admin: AdminGraphqlClient, first = 3)
   const edges: Edge[] = json?.data?.products?.edges ?? [];
   return edges.map((e) => ({
     id: e.node.id,
+    handle: e.node.handle,
     title: e.node.title,
     price: Number(e.node.priceRangeV2?.minVariantPrice?.amount ?? 0).toFixed(2),
     currency: e.node.priceRangeV2?.minVariantPrice?.currencyCode ?? "USD",

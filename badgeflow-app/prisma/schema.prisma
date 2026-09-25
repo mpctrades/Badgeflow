@@ -41,6 +41,10 @@ model ShopSettings {
   defaultSize      Int       @default(12)
   plan             String    @default("free")
   embedConfirmedAt DateTime?
+  // Display rules — persisted here. No storefront extension reads them yet.
+  hideSoldOut        Boolean @default(true)
+  oneBadgePerProduct Boolean @default(true)
+  shrinkOnMobile     Boolean @default(false)
 }
 
 model Campaign {

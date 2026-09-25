@@ -1,0 +1,7 @@
+api_version = "2026-07"
+
+[[extensions]]
+type = "theme"
+name = "BadgeFlow badges"
+handle = "badgeflow-badges"
+uid = "04ebebe2-65c7-d93d-9413-684438efe8fb064c890b"

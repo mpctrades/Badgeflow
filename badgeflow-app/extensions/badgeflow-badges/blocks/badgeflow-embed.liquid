@@ -1,0 +1,40 @@
+{%- comment -%}
+  BadgeFlow app embed. Outputs the shop's live/scheduled campaigns (synced by
+  the app into an app-owned metafield) and loads badgeflow.js, which draws the
+  badges on product cards and the product page. Renders nothing when the app
+  is switched off in BadgeFlow settings, except a sample in the theme editor.
+{%- endcomment -%}
+{%- assign bf_config = app.metafields.badgeflow.config.value -%}
+{%- assign bf_enabled = true -%}
+{%- if bf_config and bf_config.enabled == false -%}
+  {%- assign bf_enabled = false -%}
+{%- endif -%}
+
+{%- if bf_enabled or request.design_mode -%}
+  <script type="application/json" id="badgeflow-config">{{ app.metafields.badgeflow.config.value | json }}</script>
+  <script type="application/json" id="badgeflow-context">
+    {
+      "designMode": {{ request.design_mode | json }},
+      "showSample": {{ block.settings.show_sample | json }},
+      "productHandle": {% if template.name == 'product' and product %}{{ product.handle | json }}{% else %}null{% endif %},
+      "productAvailable": {% if template.name == 'product' and product %}{{ product.available | json }}{% else %}null{% endif %}
+    }
+  </script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "BadgeFlow badges",
+  "target": "body",
+  "javascript": "badgeflow.js",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "show_sample",
+      "label": "Show a sample badge in the theme editor",
+      "info": "Only visible while editing your theme, and only when no campaign is live.",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

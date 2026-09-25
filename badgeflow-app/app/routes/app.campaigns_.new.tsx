@@ -3,9 +3,10 @@ import { redirect, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { computeStatus, type PlanId } from "../lib/campaign";
-import { BADGE_PRESETS } from "../lib/badges";
+import { BADGE_PRESETS, POSITIONS } from "../lib/badges";
 import { fetchCollections, fetchPreviewProducts, fetchShopInfo, fetchTotalProductCount } from "../lib/shopify-catalog.server";
 import { CampaignWizard, type WizardInitial } from "../components/campaign-wizard";
+import { syncStorefront } from "../lib/storefront-sync.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -21,13 +22,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // AI assistant / other entry points can hand off straight to a prefilled step.
   const fromAi = url.searchParams.get("step") === "review";
+  // "Duplicate last campaign" from Home passes the position along too.
+  const positionParam = url.searchParams.get("position") ?? "";
+  const position = (POSITIONS as readonly string[]).includes(positionParam) ? positionParam : "top-left";
   const initial: WizardInitial = {
     badgeId: url.searchParams.get("badgeId") ?? BADGE_PRESETS[0]!.id,
     badgeText: url.searchParams.get("badgeText") ?? BADGE_PRESETS[0]!.label,
     badgeColor: url.searchParams.get("badgeColor") ?? BADGE_PRESETS[0]!.color,
-    position: "top-left",
+    position,
     size: Number(url.searchParams.get("size") ?? 12),
-    mobilePosition: "top-left",
+    mobilePosition: position,
     mobileSize: Number(url.searchParams.get("size") ?? 12),
     targetType: url.searchParams.get("targetType") ?? "all",
     targetRef: url.searchParams.get("targetRef") ?? "",
@@ -49,12 +53,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "draft");
 
   const campaignName = String(formData.get("campaignName") ?? "").trim();
-  const badgeId = String(formData.get("badgeId") ?? "");
   const badgeText = String(formData.get("badgeText") ?? "").trim();
   const badgeColor = String(formData.get("badgeColor") ?? "#E33C2B");
   const position = String(formData.get("position") ?? "top-left");
@@ -99,6 +102,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   });
 
+  await syncStorefront(admin, session.shop);
   if (isDraft) return redirect("/app/campaigns?toast=draft-saved");
   const isImmediate = computeStatus(campaign.startAt, campaign.endAt) === "live";
   return redirect(`/app/campaigns/storefront?id=${campaign.id}&toast=${isImmediate ? "published" : "scheduled"}`);

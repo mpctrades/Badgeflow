@@ -5,6 +5,7 @@ import db from "../db.server";
 import { computeStatus, type PlanId } from "../lib/campaign";
 import { fetchCollections, fetchPreviewProducts, fetchShopInfo, fetchTotalProductCount } from "../lib/shopify-catalog.server";
 import { CampaignWizard, type WizardInitial } from "../components/campaign-wizard";
+import { syncStorefront } from "../lib/storefront-sync.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -58,7 +59,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "draft");
   const isDuplicate = new URL(request.url).searchParams.get("duplicate") === "1";
@@ -107,11 +108,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (isDuplicate) {
     const created = await db.campaign.create({ data: { shop: session.shop, ...data } });
+    await syncStorefront(admin, session.shop);
     if (isDraft) return redirect("/app/campaigns?toast=draft-saved");
     return redirect(`/app/campaigns/storefront?id=${created.id}&toast=${publishToast}`);
   }
 
   await db.campaign.updateMany({ where: { id: params.id, shop: session.shop }, data });
+  await syncStorefront(admin, session.shop);
   if (isDraft) return redirect("/app/campaigns?toast=draft-saved");
   return redirect(`/app/campaigns/storefront?id=${params.id}&toast=${publishToast}`);
 };

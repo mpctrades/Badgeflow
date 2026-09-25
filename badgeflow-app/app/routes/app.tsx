@@ -5,9 +5,12 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
 import { ToastProvider } from "../components/toast";
+import { refreshPlan } from "../lib/billing.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  // Keeps ShopSettings.plan in step with Shopify App Pricing (cached ~5 min).
+  await refreshPlan(admin, session.shop);
 
   // eslint-disable-next-line no-undef
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
@@ -21,7 +24,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/campaigns">Campaigns</s-link>
-        <s-link href="/app/ai">AI assistant</s-link>
+        <s-link href="/app/ai">AI assistant (Beta)</s-link>
         <s-link href="/app/plan">Plan &amp; billing</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/setup">Store setup</s-link>

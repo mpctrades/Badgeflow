@@ -1,5 +1,7 @@
 /* Brand color mirrors BRAND in app/lib/campaign.ts — keep in sync if that changes. */
 .index {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  color: #2B2620;
   align-items: center;
   display: flex;
   justify-content: center;
@@ -93,6 +95,16 @@
   background: #4A3FC7;
 }
 
+.note {
+  margin: 0 auto;
+  max-width: 30rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: #EFEDFB;
+  color: #2B2620;
+  font-size: 0.95rem;
+}
+
 .list {
   list-style: none;
   padding: 0;
@@ -106,6 +118,7 @@
 
 .list > li {
   max-width: 16rem;
+  line-height: 1.45;
   font-size: 0.9rem;
   color: #2B2620;
 }
