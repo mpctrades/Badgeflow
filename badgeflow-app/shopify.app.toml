@@ -6,10 +6,10 @@ application_url = "https://dev.badgeflow.mpctrades.com"
 embedded = true
 
 [access_scopes]
-# read_products: badge targeting (products/collections). read_themes: setup
-# checker confirms the app embed block is on. No write scopes for V1 — keeps
-# App Store review simple, per the product brief.
-scopes = "read_products,read_themes"
+# read_products: badge targeting (products/collections). The app embed's
+# on/off status comes from App Bridge app.extensions(), which needs no scope.
+# No write scopes — keeps App Store review simple.
+scopes = "read_products"
 
 [webhooks]
 api_version = "2026-10"

@@ -187,36 +187,3 @@ export const EMBED_HANDLE = "badgeflow-embed";
 export function themeEditorEmbedLink(apiKey: string): string {
   return `shopify:admin/themes/current/editor?context=apps&activateAppId=${apiKey}/${EMBED_HANDLE}`;
 }
-
-export type EmbedStatus = { enabled: boolean; themeName: string | null; checked: boolean };
-
-// Reads the main theme's settings_data.json (read_themes scope) to see
-// whether the BadgeFlow app embed is present and not disabled.
-export async function fetchEmbedStatus(admin: AdminGraphqlClient): Promise<EmbedStatus> {
-  try {
-    const response = await admin.graphql(`#graphql
-      query BadgeFlowEmbedStatus {
-        themes(first: 1, roles: [MAIN]) {
-          nodes {
-            name
-            files(filenames: ["config/settings_data.json"], first: 1) {
-              nodes { body { ... on OnlineStoreThemeFileBodyText { content } } }
-            }
-          }
-        }
-      }`);
-    const theme = (await response.json())?.data?.themes?.nodes?.[0];
-    if (!theme) return { enabled: false, themeName: null, checked: false };
-    const raw: string = theme.files?.nodes?.[0]?.body?.content ?? "";
-    // settings_data.json often starts with a /* ... */ comment header.
-    const data = JSON.parse(raw.replace(/^\s*\/\*[\s\S]*?\*\//, "") || "{}");
-    const blocks: Record<string, { type?: string; disabled?: boolean }> = data?.current?.blocks ?? {};
-    const enabled = Object.values(blocks).some(
-      (b) => typeof b?.type === "string" && b.type.includes(`/blocks/${EMBED_HANDLE}/`) && b.disabled !== true,
-    );
-    return { enabled, themeName: theme.name ?? null, checked: true };
-  } catch (error) {
-    console.error("[BadgeFlow] embed status check failed:", error);
-    return { enabled: false, themeName: null, checked: false };
-  }
-}

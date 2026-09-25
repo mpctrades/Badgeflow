@@ -1,32 +1,20 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
+import { useEffect, useState } from "react";
+import { Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { displayStatus, PLANS, setupSteps, type PlanId } from "../lib/campaign";
 import { fetchPreviewProducts, fetchProductIdsForTarget } from "../lib/shopify-catalog.server";
 import { useActionToast } from "../lib/use-toast";
-import { fetchEmbedStatus, themeEditorEmbedLink } from "../lib/storefront-sync.server";
+import { EMBED_HANDLE, themeEditorEmbedLink } from "../lib/storefront-sync.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  const [storedSettings, campaigns, previewProducts, embed] = await Promise.all([
+  const [settings, campaigns, previewProducts] = await Promise.all([
     db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
     db.campaign.findMany({ where: { shop: session.shop }, orderBy: { createdAt: "desc" } }),
     fetchPreviewProducts(admin, 1),
-    fetchEmbedStatus(admin),
   ]);
-  const themeName = embed.themeName;
-
-  // The live theme is the source of truth: record when the embed is found on,
-  // and clear the flag if the merchant later switched it off. If the theme
-  // couldn't be read, keep whatever the merchant confirmed manually.
-  let settings = storedSettings;
-  if (embed.checked && embed.enabled !== !!storedSettings.embedConfirmedAt) {
-    settings = await db.shopSettings.update({
-      where: { shop: session.shop },
-      data: { embedConfirmedAt: embed.enabled ? new Date() : null },
-    });
-  }
 
   const live = campaigns.filter((c) => displayStatus(c) === "live");
   const liveIds = await Promise.all(live.map((c) => fetchProductIdsForTarget(admin, c)));
@@ -48,8 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     settings,
     campaignCount: campaigns.length,
     storefrontUrl: `https://${session.shop}`,
-    themeName,
-    embedAutoChecked: embed.checked,
+    embedHandle: EMBED_HANDLE,
     // eslint-disable-next-line no-undef
     editorLink: themeEditorEmbedLink(process.env.SHOPIFY_API_KEY || ""),
     featured: featured
@@ -84,6 +71,17 @@ function formatPrice(amount: string, currency: string): string {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
+  // The page reports what App Bridge's app.extensions() says about the embed
+  // on the published theme, so Home and Settings know without re-checking.
+  if (formData.get("intent") === "embed-status") {
+    const active = formData.get("active") === "1";
+    await db.shopSettings.upsert({
+      where: { shop: session.shop },
+      update: { embedConfirmedAt: active ? new Date() : null },
+      create: { shop: session.shop, embedConfirmedAt: active ? new Date() : null },
+    });
+    return null;
+  }
   if (formData.get("intent") === "confirm-embed") {
     await db.shopSettings.upsert({
       where: { shop: session.shop },
@@ -134,13 +132,43 @@ const HELP = [
 ];
 
 export default function Setup() {
-  const { settings, campaignCount, storefrontUrl, themeName, embedAutoChecked, editorLink, featured, product, plan, badgedProductCount } =
+  const { settings, campaignCount, storefrontUrl, embedHandle, editorLink, featured, product, plan, badgedProductCount } =
     useLoaderData<typeof loader>();
+  // Embed status straight from Shopify (App Bridge app.extensions(): no
+  // scopes, no theme file access). null = not known yet / API unavailable.
+  const [embedActive, setEmbedActive] = useState<boolean | null>(null);
+  const [embedAutoChecked, setEmbedAutoChecked] = useState(false);
+  const statusFetcher = useFetcher();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const api = (window as unknown as { shopify?: { app?: { extensions?: () => Promise<{ type: string; activations: { handle: string; status: string }[] }[]> } } }).shopify?.app;
+        if (!api?.extensions) return;
+        const extensions = await api.extensions();
+        const active = extensions
+          .filter((e) => e.type === "theme_app_extension")
+          .some((e) => e.activations.some((a) => a.handle === embedHandle && a.status === "active"));
+        if (cancelled) return;
+        setEmbedActive(active);
+        setEmbedAutoChecked(true);
+        if (active !== !!settings.embedConfirmedAt) {
+          statusFetcher.submit({ intent: "embed-status", active: active ? "1" : "0" }, { method: "post" });
+        }
+      } catch {
+        // Fall back to the merchant's manual confirmation.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state === "submitting";
   useActionToast(actionData);
-  const embedConfirmed = !!settings.embedConfirmedAt;
+  const embedConfirmed = embedActive ?? !!settings.embedConfirmedAt;
   const steps = setupSteps({ embedConfirmed, hasCampaign: campaignCount > 0 });
   const doneCount = steps.filter((s) => s.done).length;
   const left = steps.length - doneCount;
@@ -165,7 +193,7 @@ export default function Setup() {
       return (
         <s-stack direction="block" gap="small-200">
           <div className="bfs-muted">
-            Click the button below. Your theme editor{themeName ? ` (${themeName})` : ""} opens with the BadgeFlow
+            Click the button below. Your theme editor opens with the BadgeFlow
             embed already switched on — just click <strong>Save</strong>, then come back to this page.
           </div>
           <s-stack direction="inline" gap="small-200">
@@ -183,7 +211,7 @@ export default function Setup() {
           </s-stack>
           <div className="bfs-muted">
             {embedAutoChecked
-              ? "BadgeFlow checks your live theme automatically each time you open this page."
+              ? "BadgeFlow asks Shopify whether the embed is on each time you open this page."
               : "We couldn't read your theme just now, so confirm it yourself once the embed is on."}
           </div>
         </s-stack>
@@ -247,7 +275,7 @@ export default function Setup() {
 
   function stepDoneText(key: string) {
     if (key === "embed") {
-      return `BadgeFlow can draw on your product cards${themeName ? ` in the ${themeName} theme` : ""}.`;
+      return "BadgeFlow can draw on your product cards in your live theme.";
     }
     if (key === "campaign" && featured) {
       return featured.isLive
