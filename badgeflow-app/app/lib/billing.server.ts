@@ -11,6 +11,7 @@
 //   SHOPIFY_APP_HANDLE                app handle used in the plan selection URL (default "badgeflow-app")
 import db from "../db.server";
 import type { PlanId } from "./campaign";
+import { syncStorefront } from "./storefront-sync.server";
 
 type AdminGraphqlClient = { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
 
@@ -140,6 +141,8 @@ export async function refreshPlan(
     };
     if (status.plan !== settings.plan) {
       await db.shopSettings.update({ where: { shop }, data: { plan: status.plan } });
+      // Plan limits are applied in the storefront copy, so republish it.
+      await syncStorefront(admin, shop);
     }
     cache.set(shop, { status, at: Date.now() });
     return status;
