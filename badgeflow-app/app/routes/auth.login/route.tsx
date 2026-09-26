@@ -1,48 +1,38 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
-import { useState } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import type { LoaderFunctionArgs } from "react-router";
+import { useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
+// App Store requirement 2.3.1: BadgeFlow never asks merchants to type their
+// myshopify.com domain. Shopify sends the shop along when the app is opened
+// from the admin or installed from the App Store; without it we only explain
+// where to open the app from.
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const url = new URL(request.url);
+  if (!url.searchParams.get("shop")) return { error: null };
+
+  // Redirects into Shopify's auth flow for a valid shop.
   const errors = loginErrorMessage(await login(request));
-
-  return { errors };
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const errors = loginErrorMessage(await login(request));
-
-  return {
-    errors,
-  };
+  return { error: errors.shop ?? null };
 };
 
 export default function Auth() {
-  const loaderData = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const [shop, setShop] = useState("");
-  const { errors } = actionData || loaderData;
+  const { error } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded={false}>
       <s-page>
-        <Form method="post">
-        <s-section heading="Log in">
-          <s-text-field
-            name="shop"
-            label="Shop domain"
-            details="example.myshopify.com"
-            value={shop}
-            onChange={(e) => setShop(e.currentTarget.value)}
-            autocomplete="on"
-            error={errors.shop}
-          ></s-text-field>
-          <s-button type="submit">Log in</s-button>
+        <s-section heading="Open BadgeFlow from Shopify">
+          <s-stack direction="block" gap="base">
+            {error && <s-banner tone="critical">{error}</s-banner>}
+            <s-paragraph>
+              BadgeFlow runs inside your Shopify admin. Install it from the Shopify App Store, then open it from{" "}
+              <s-text fontWeight="bold">Apps → BadgeFlow</s-text> in your admin.
+            </s-paragraph>
+          </s-stack>
         </s-section>
-        </Form>
       </s-page>
     </AppProvider>
   );

@@ -3,10 +3,12 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, Link, useActionData, useLoaderData, useSearchParams, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { BRAND, displayStatus, statusTone, type CampaignStatus } from "../lib/campaign";
+import {
+  BRAND, displayStatus, PLANS, productsLabel, runningWindows, statusTone, storefrontStatus, type CampaignStatus, type PlanId,
+} from "../lib/campaign";
 import { positionLabel } from "../lib/badges";
 import { fetchShopInfo } from "../lib/shopify-catalog.server";
-import { useActionToast, useQueryToast } from "../lib/use-toast";
+import { campaignToasts, useActionToast, useQueryToast } from "../lib/use-toast";
 import { syncStorefront } from "../lib/storefront-sync.server";
 
 type SortKey = "newest" | "oldest" | "start";
@@ -34,18 +36,6 @@ function dateFormatters(timeZone: string) {
   };
 }
 
-// "All products", "12 products", or the collection's stored count suffix
-// ("Autumn Essentials — 42 products" → "42 products").
-function productsLabel(c: { targetType: string; targetRef: string; targetValue: string }): string {
-  if (c.targetType === "all") return "All products";
-  if (c.targetType === "products") {
-    const n = c.targetRef.split(",").map((h) => h.trim()).filter(Boolean).length;
-    return `${n} product${n === 1 ? "" : "s"}`;
-  }
-  const idx = c.targetValue.lastIndexOf(" — ");
-  return idx === -1 ? c.targetValue : c.targetValue.slice(idx + 3);
-}
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -55,14 +45,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const sort: SortKey = SORTS.some((s) => s.key === sortParam) ? (sortParam as SortKey) : "newest";
   const now = new Date();
 
-  const [allCampaigns, shopInfo] = await Promise.all([
+  const [allCampaigns, shopInfo, settings] = await Promise.all([
     db.campaign.findMany({ where: { shop: session.shop }, orderBy: { createdAt: "desc" } }),
     fetchShopInfo(admin),
+    db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
   ]);
   const fmt = dateFormatters(shopInfo.ianaTimezone);
+  const plan = (settings.plan in PLANS ? settings.plan : "free") as PlanId;
+  // On Free, a campaign that is live by its dates may be waiting its turn.
+  const windows = runningWindows(allCampaigns, plan, now);
 
-  const all = allCampaigns.map((c) => ({ ...c, computedStatus: displayStatus(c, now) }));
-  const totals = { all: all.length, live: all.filter((c) => c.computedStatus === "live").length };
+  const all = allCampaigns.map((c) => ({
+    ...c,
+    computedStatus: displayStatus(c, now),
+    shownStatus: storefrontStatus(c, windows, now),
+  }));
+  const totals = { all: all.length, live: all.filter((c) => c.shownStatus === "live").length };
 
   const needle = q.trim().toLowerCase();
   const matching = needle
@@ -86,6 +84,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
 
   const statusText = (c: (typeof all)[number]): string => {
+    if (c.shownStatus === "queued") return "Queued";
     if (c.computedStatus === "scheduled") {
       const days = fmt.daysBetween(now, c.startAt);
       return days <= 0 ? "Starts today" : days === 1 ? "Tomorrow" : `In ${days} days`;
@@ -109,8 +108,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       scheduleStart: c.startAt <= now ? `Since ${fmt.dayMonth(c.startAt)}` : fmt.dayMonthTime(c.startAt),
       scheduleEnd: c.endAt ? `${c.endAt <= now ? "Ended" : "Ends"} ${fmt.dayMonthTime(c.endAt)}` : "No end date",
       status: c.computedStatus,
+      tone: statusTone(c.shownStatus),
       statusText: statusText(c),
     })),
+    embedConfirmed: !!settings.embedConfirmedAt,
+    freePlan: plan === "free",
   };
 };
 
@@ -120,26 +122,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent");
   const id = String(formData.get("id"));
 
+  // Every change republishes the storefront; say so plainly if that failed,
+  // instead of claiming the badges changed.
+  async function done(message: string) {
+    const { ok } = await syncStorefront(admin, session.shop);
+    return ok
+      ? { ok: true, message }
+      : { ok: false, isError: true, message: `${message}, but your storefront couldn't be updated. Try again in a minute.` };
+  }
+
   if (intent === "delete") {
     await db.campaign.deleteMany({ where: { id, shop: session.shop } });
-    await syncStorefront(admin, session.shop);
-    return { ok: true, message: "Campaign deleted" };
+    return done("Campaign deleted");
   }
   if (intent === "delete-many") {
     const ids = String(formData.get("ids") ?? "").split(",").filter(Boolean);
     const { count } = await db.campaign.deleteMany({ where: { id: { in: ids }, shop: session.shop } });
-    await syncStorefront(admin, session.shop);
-    return { ok: true, message: `${count} campaign${count === 1 ? "" : "s"} deleted` };
+    return done(`${count} campaign${count === 1 ? "" : "s"} deleted`);
   }
   if (intent === "end-now") {
     await db.campaign.updateMany({ where: { id, shop: session.shop }, data: { endAt: new Date() } });
-    await syncStorefront(admin, session.shop);
-    return { ok: true, message: "Campaign ended — badges removed from your storefront" };
+    const result = await done("Campaign ended");
+    return result.ok ? { ...result, message: "Campaign ended — badges removed from your storefront" } : result;
   }
   if (intent === "cancel-schedule") {
     await db.campaign.updateMany({ where: { id, shop: session.shop }, data: { isDraft: true } });
-    await syncStorefront(admin, session.shop);
-    return { ok: true, message: "Campaign moved back to draft" };
+    return done("Campaign moved back to draft");
   }
 
   return null;
@@ -153,12 +161,6 @@ const CSS = `
 .bfc-tools { display: flex; align-items: center; gap: 8px; flex: 1 1 260px; justify-content: flex-end; }
 .bfc-tools form { flex: 0 1 240px; min-width: 160px; }
 .bfc-bulk { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; margin-bottom: 8px; background: #F7F7F7; border-radius: 8px; font-size: 13px; }
-.bfc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.bfc-table th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: #616161; padding: 9px 10px 9px 0; background: #F7F7F7; border-bottom: 1px solid #EBEBEB; white-space: nowrap; }
-.bfc-table th:first-child, .bfc-table td:first-child { padding-left: 10px; width: 28px; }
-.bfc-table td { padding: 12px 10px 12px 0; border-bottom: 1px solid #F1F1F1; vertical-align: middle; }
-.bfc-table tr[data-selected="true"] td { background: #F7F7FF; }
-.bfc-right { text-align: right; }
 .bfc-name { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; min-width: 0; }
 .bfc-name:hover .bfc-title { color: ${BRAND}; }
 .bfc-pill { display: inline-block; padding: 4px 8px; border-radius: 4px; color: #fff; font-size: 10.5px; font-weight: 700; white-space: nowrap; flex: 0 0 auto; }
@@ -175,18 +177,14 @@ const CSS = `
 `;
 
 export default function Campaigns() {
-  const { campaigns, counts, totals, q, statusFilter, sort } = useLoaderData<typeof loader>();
+  const { campaigns, counts, totals, q, statusFilter, sort, embedConfirmed, freePlan } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const [searchParams] = useSearchParams();
   const submit = useSubmit();
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useActionToast(actionData);
-  useQueryToast({
-    "draft-saved": "Draft saved",
-    published: "Campaign published — badges are live",
-    scheduled: "Campaign scheduled",
-  });
+  useQueryToast(campaignToasts(embedConfirmed));
 
   // Drop selections that no longer exist (after a delete or a filter change).
   const visibleSelected = [...selected].filter((id) => campaigns.some((c) => c.id === id));
@@ -228,11 +226,10 @@ export default function Campaigns() {
       <s-button slot="primary-action" variant="primary" icon="plus" href="/app/campaigns/new">
         Create campaign
       </s-button>
-      <s-button slot="secondary-actions" icon="magic" href="/app/ai">
-        Draft with AI (Beta)
-      </s-button>
-
-      <div className="bfc-sub" style={{ fontSize: 13, marginBottom: 12 }}>{subheading}</div>
+      <div className="bfc-sub" style={{ fontSize: 13, marginBottom: 12 }}>
+        {subheading}
+        {freePlan && totals.all > 1 ? " · Free shows one campaign at a time; others queue" : ""}
+      </div>
 
       <s-section padding="base">
         {totals.all === 0 ? (
@@ -313,88 +310,82 @@ export default function Campaigns() {
               </div>
             ) : (
               <>
-                <div style={{ overflowX: "auto" }}>
-                  <table className="bfc-table">
-                    <thead>
-                      <tr>
-                        <th>
-                          <input
-                            type="checkbox"
-                            aria-label="Select all campaigns"
-                            checked={allChecked}
-                            onChange={() => setSelected(allChecked ? new Set() : new Set(campaigns.map((c) => c.id)))}
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header>
+                      <s-checkbox
+                        accessibilityLabel="Select all campaigns"
+                        checked={allChecked}
+                        onChange={() => setSelected(allChecked ? new Set() : new Set(campaigns.map((c) => c.id)))}
+                      />
+                    </s-table-header>
+                    <s-table-header listSlot="primary">Badge &amp; campaign</s-table-header>
+                    <s-table-header listSlot="labeled">Products</s-table-header>
+                    <s-table-header listSlot="labeled">Schedule</s-table-header>
+                    <s-table-header listSlot="secondary">Status</s-table-header>
+                    <s-table-header format="numeric">Actions</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {campaigns.map((c) => (
+                      <s-table-row key={c.id}>
+                        <s-table-cell>
+                          <s-checkbox
+                            accessibilityLabel={`Select ${c.name}`}
+                            checked={selected.has(c.id)}
+                            onChange={() => toggle(c.id)}
                           />
-                        </th>
-                        <th>Badge &amp; campaign</th>
-                        <th className="bfc-hide-sm">Products</th>
-                        <th className="bfc-hide-sm">Schedule</th>
-                        <th>Status</th>
-                        <th className="bfc-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {campaigns.map((c) => (
-                        <tr key={c.id} data-selected={selected.has(c.id)}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              aria-label={`Select ${c.name}`}
-                              checked={selected.has(c.id)}
-                              onChange={() => toggle(c.id)}
-                            />
-                          </td>
-                          <td style={{ maxWidth: 320 }}>
-                            <Link className="bfc-name" to={`/app/campaigns/${c.id}/edit`}>
-                              <span className="bfc-pill" style={{ background: c.badgeColor }}>{c.badgeText}</span>
-                              <span style={{ minWidth: 0 }}>
-                                <span className="bfc-title" style={{ display: "block" }}>{c.name}</span>
-                                <span className="bfc-sub">{c.placement}</span>
-                              </span>
-                            </Link>
-                          </td>
-                          <td className="bfc-hide-sm" style={{ whiteSpace: "nowrap" }}>{c.products}</td>
-                          <td className="bfc-hide-sm" style={{ whiteSpace: "nowrap" }}>
-                            <div>{c.scheduleStart}</div>
-                            <div className="bfc-sub">{c.scheduleEnd}</div>
-                          </td>
-                          <td>
-                            <s-badge tone={statusTone(c.status)}>{c.statusText}</s-badge>
-                          </td>
-                          <td className="bfc-right">
-                            <span className="bfc-actions">
-                              <s-button href={`/app/campaigns/storefront?id=${c.id}`}>Preview</s-button>
-                              <s-button
-                                icon="menu-horizontal"
-                                accessibilityLabel={`More actions for ${c.name}`}
-                                command="--toggle"
-                                commandFor={`actions-menu-${c.id}`}
-                              />
-                              <s-menu id={`actions-menu-${c.id}`} accessibilityLabel="Campaign actions">
-                                <s-button icon="edit" href={`/app/campaigns/${c.id}/edit`}>
-                                  {c.status === "draft" ? "Continue editing" : "Edit"}
-                                </s-button>
-                                <s-button icon="duplicate" href={`/app/campaigns/${c.id}/edit?duplicate=1`}>Duplicate</s-button>
-                                {c.status === "scheduled" && (
-                                  <s-button icon="undo" onClick={() => submit({ intent: "cancel-schedule", id: c.id }, { method: "post" })}>
-                                    Move back to draft
-                                  </s-button>
-                                )}
-                                {c.status === "live" && (
-                                  <s-button icon="stop-circle" command="--show" commandFor={`end-modal-${c.id}`}>End now</s-button>
-                                )}
-                                <s-button icon="delete" tone="critical" command="--show" commandFor={`delete-modal-${c.id}`}>
-                                  Delete
-                                </s-button>
-                              </s-menu>
-                              {c.status === "live" && <EndModal campaign={{ id: c.id, badgeLabel: c.name }} />}
-                              <DeleteModal id={c.id} name={c.name} />
+                        </s-table-cell>
+                        <s-table-cell>
+                          <Link className="bfc-name" to={`/app/campaigns/${c.id}/edit`}>
+                            <span className="bfc-pill" style={{ background: c.badgeColor }}>{c.badgeText}</span>
+                            <span style={{ minWidth: 0 }}>
+                              <span className="bfc-title" style={{ display: "block" }}>{c.name}</span>
+                              <span className="bfc-sub">{c.placement}</span>
                             </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                          </Link>
+                        </s-table-cell>
+                        <s-table-cell>{c.products}</s-table-cell>
+                        <s-table-cell>
+                          <div>{c.scheduleStart}</div>
+                          <div className="bfc-sub">{c.scheduleEnd}</div>
+                        </s-table-cell>
+                        <s-table-cell>
+                          <s-badge tone={c.tone}>{c.statusText}</s-badge>
+                        </s-table-cell>
+                        <s-table-cell>
+                          <span className="bfc-actions">
+                            <s-button href={`/app/campaigns/storefront?id=${c.id}`}>Preview</s-button>
+                            <s-button
+                              icon="menu-horizontal"
+                              accessibilityLabel={`More actions for ${c.name}`}
+                              command="--toggle"
+                              commandFor={`actions-menu-${c.id}`}
+                            />
+                            <s-menu id={`actions-menu-${c.id}`} accessibilityLabel="Campaign actions">
+                              <s-button icon="edit" href={`/app/campaigns/${c.id}/edit`}>
+                                {c.status === "draft" ? "Continue editing" : "Edit"}
+                              </s-button>
+                              <s-button icon="duplicate" href={`/app/campaigns/${c.id}/edit?duplicate=1`}>Duplicate</s-button>
+                              {c.status === "scheduled" && (
+                                <s-button icon="undo" onClick={() => submit({ intent: "cancel-schedule", id: c.id }, { method: "post" })}>
+                                  Move back to draft
+                                </s-button>
+                              )}
+                              {c.status === "live" && (
+                                <s-button icon="stop-circle" command="--show" commandFor={`end-modal-${c.id}`}>End now</s-button>
+                              )}
+                              <s-button icon="delete" tone="critical" command="--show" commandFor={`delete-modal-${c.id}`}>
+                                Delete
+                              </s-button>
+                            </s-menu>
+                            {c.status === "live" && <EndModal campaign={{ id: c.id, badgeLabel: c.name }} />}
+                            <DeleteModal id={c.id} name={c.name} />
+                          </span>
+                        </s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
 
                 <div className="bfc-footer">
                   <span className="bfc-footer-icon"><s-icon type="discount" /></span>

@@ -40,8 +40,11 @@ model ShopSettings {
   defaultPosition  String    @default("top-left")
   defaultSize      Int       @default(12)
   plan             String    @default("free")
+  // Last time Shopify App Pricing confirmed `plan`; bounds how long a stored
+  // paid plan is trusted while the Partner API can't be reached.
+  planCheckedAt    DateTime?
   embedConfirmedAt DateTime?
-  // Display rules — persisted here. No storefront extension reads them yet.
+  // Display rules — published to the storefront embed with the campaigns.
   hideSoldOut        Boolean @default(true)
   oneBadgePerProduct Boolean @default(true)
   shrinkOnMobile     Boolean @default(false)

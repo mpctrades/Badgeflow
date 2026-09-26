@@ -19,6 +19,12 @@ const PARTNER_API_VERSION = "2026-07";
 // Only confirmed results are cached, so a merchant who just approved a plan is
 // checked again right away via `force`, and cancellations show up within minutes.
 const CACHE_MS = 5 * 60 * 1000;
+// While the Partner API can't be reached, the last confirmed paid plan is
+// honoured for this long, then the shop falls back to Free until Shopify
+// confirms the plan again. Protects paying merchants from short outages
+// without leaving cancelled ones on paid features indefinitely.
+const STALE_PLAN_MS = 7 * 24 * 60 * 60 * 1000;
+let warnedUnconfigured = false;
 const cache = new Map<string, { status: PlanStatus; at: number }>();
 
 export type PlanStatus = {
@@ -121,7 +127,15 @@ export async function refreshPlan(
     pendingPlan: null,
     error: null,
   };
-  if (!billingConfigured()) return { ...stored, error: "Shopify App Pricing isn't connected on this server yet." };
+  if (!billingConfigured()) {
+    if (!warnedUnconfigured) {
+      warnedUnconfigured = true;
+      console.error(
+        "[BadgeFlow] Billing is not configured: set SHOPIFY_PARTNER_ORG_ID, SHOPIFY_PARTNER_API_ACCESS_TOKEN and SHOPIFY_APP_GID. Paid plans can't be detected until then.",
+      );
+    }
+    return { ...stored, error: "Shopify App Pricing isn't connected on this server yet." };
+  }
 
   try {
     const shopResponse = await admin.graphql(`#graphql
@@ -139,15 +153,28 @@ export async function refreshPlan(
       pendingPlan: sub?.pendingUpdate?.items?.[0] ? planFromHandle(sub.pendingUpdate.items[0].handle) : null,
       error: null,
     };
+    await db.shopSettings.update({ where: { shop }, data: { plan: status.plan, planCheckedAt: new Date() } });
     if (status.plan !== settings.plan) {
-      await db.shopSettings.update({ where: { shop }, data: { plan: status.plan } });
       // Plan limits are applied in the storefront copy, so republish it.
       await syncStorefront(admin, shop);
     }
     cache.set(shop, { status, at: Date.now() });
     return status;
   } catch (error) {
+    if (error instanceof Response) throw error;
     console.error(`[BadgeFlow] plan check failed for ${shop}:`, error);
+    // No timestamp yet means the plan predates this check; start the clock
+    // from the next successful confirmation instead of downgrading blindly.
+    const checkedAt = settings.planCheckedAt?.getTime();
+    if (stored.plan !== "free" && checkedAt && Date.now() - checkedAt > STALE_PLAN_MS) {
+      await db.shopSettings.update({ where: { shop }, data: { plan: "free" } });
+      await syncStorefront(admin, shop);
+      return {
+        ...stored,
+        plan: "free",
+        error: "We couldn't confirm your plan with Shopify for over a week, so Free limits apply until it's confirmed again.",
+      };
+    }
     return { ...stored, error: "Couldn't reach Shopify billing just now — showing your last known plan." };
   }
 }

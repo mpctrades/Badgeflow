@@ -2,8 +2,13 @@ import type { LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { fetchPreviewProducts, fetchShopInfo } from "../lib/shopify-catalog.server";
-import { useQueryToast } from "../lib/use-toast";
+import { positionLabel } from "../lib/badges";
+import { PLANS, runningWindows, statusLabel, statusTone, storefrontStatus, type PlanId } from "../lib/campaign";
+import { fetchPreviewProducts, fetchShopInfo, formatPrice } from "../lib/shopify-catalog.server";
+import { syncStorefrontIfStale } from "../lib/storefront-sync.server";
+import { formatInZone } from "../lib/timezone";
+import { campaignToasts, useQueryToast } from "../lib/use-toast";
+import { useEmbedStatus } from "../lib/use-embed-status";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -16,95 +21,144 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   if (!campaign) throw redirect("/app/campaigns");
 
-  const [shopInfo, products] = await Promise.all([
+  const [shopInfo, settings, campaigns, sync] = await Promise.all([
     fetchShopInfo(admin),
-    fetchPreviewProducts(admin, 3),
+    db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
+    db.campaign.findMany({ where: { shop: session.shop } }),
+    syncStorefrontIfStale(admin, session.shop),
   ]);
+  const plan = (settings.plan in PLANS ? settings.plan : "free") as PlanId;
+  const windows = runningWindows(campaigns, plan);
+  const status = storefrontStatus(campaign, windows);
+  const window = windows.get(campaign.id);
 
-  return { campaign, shopName: shopInfo.name, products };
+  // Only the products this campaign really badges (after plan limits).
+  const published = sync.config?.campaigns.find((c) => c.id === campaign.id);
+  const products = published
+    ? await fetchPreviewProducts(admin, 3, published.all ? undefined : published.handles)
+    : [];
+
+  const tz = shopInfo.ianaTimezone;
+  const runsFrom = window?.startAt ?? campaign.startAt;
+  return {
+    campaign: {
+      id: campaign.id,
+      name: campaign.badgeLabel,
+      badgeText: campaign.badgeText,
+      badgeColor: campaign.badgeColor,
+      position: campaign.position,
+      size: campaign.size,
+      mobile:
+        campaign.mobilePosition && (campaign.mobilePosition !== campaign.position || campaign.mobileSize !== campaign.size)
+          ? `${positionLabel(campaign.mobilePosition)} · ${campaign.mobileSize ?? campaign.size}%`
+          : null,
+      target: campaign.targetValue,
+    },
+    status,
+    schedule: `${formatInZone(runsFrom, tz)} → ${campaign.endAt ? formatInZone(campaign.endAt, tz) : "no end date"}`,
+    queuedNote:
+      status === "queued"
+        ? window
+          ? `On the Free plan this campaign waits for the one before it and starts ${formatInZone(window.startAt, tz)}.`
+          : "On the Free plan only one campaign runs at a time, and the one before this has no end date, so this one won't show until it ends or you upgrade."
+        : null,
+    notShown: !published && (status === "live" || status === "scheduled"),
+    timezone: tz,
+    shopName: shopInfo.name,
+    embedConfirmed: !!settings.embedConfirmedAt,
+    products: products.map((p) => ({ id: p.id, title: p.title, imageUrl: p.imageUrl, price: formatPrice(p.price, p.currency) })),
+  };
 };
 
+function badgeStyle(position: string, size: number, color: string): React.CSSProperties {
+  return {
+    position: "absolute",
+    ...(position.startsWith("top") ? { top: "6%" } : {}),
+    ...(position.startsWith("bottom") ? { bottom: "6%" } : {}),
+    ...(position.includes("middle") ? { top: "50%", transform: "translateY(-50%)" } : {}),
+    ...(position.endsWith("left") ? { left: "6%" } : {}),
+    ...(position.endsWith("right") ? { right: "6%" } : {}),
+    ...(position.endsWith("center")
+      ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
+      : {}),
+    background: color, color: "#fff", fontWeight: 700,
+    padding: "4px 8px", borderRadius: 4, fontSize: 6 + size / 2, whiteSpace: "nowrap",
+  };
+}
+
 export default function StorefrontPreview() {
-  const { campaign, shopName, products } = useLoaderData<typeof loader>();
-
-  useQueryToast({
-    published: "Campaign published — badges are live",
-    scheduled: "Campaign scheduled",
-  });
-
-  function badgeStyle(): React.CSSProperties {
-    const position = campaign.position;
-    return {
-      position: "absolute",
-      ...(position.startsWith("top") ? { top: "8%" } : {}),
-      ...(position.startsWith("bottom") ? { bottom: "8%" } : {}),
-      ...(position.includes("middle") ? { top: "50%", transform: "translateY(-50%)" } : {}),
-      ...(position.endsWith("left") ? { left: "8%" } : {}),
-      ...(position.endsWith("right") ? { right: "8%" } : {}),
-      ...(position.endsWith("center")
-        ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
-        : {}),
-      background: campaign.badgeColor, color: "#fff", fontWeight: 700,
-      padding: "4px 8px", borderRadius: 6, fontSize: 8 + campaign.size / 2, whiteSpace: "nowrap",
-    };
-  }
+  const { campaign, status, schedule, queuedNote, notShown, timezone, shopName, embedConfirmed, products } =
+    useLoaderData<typeof loader>();
+  const embedOn = useEmbedStatus(embedConfirmed).active;
+  useQueryToast(campaignToasts(embedOn));
 
   return (
-    <s-page heading="Storefront preview">
+    <s-page heading={campaign.name}>
       <s-link slot="breadcrumb-actions" href="/app/campaigns">Campaigns</s-link>
-      <s-paragraph>What shoppers at {shopName} see during the active campaign window.</s-paragraph>
+      <s-button slot="primary-action" href={`/app/campaigns/${campaign.id}/edit`}>Edit campaign</s-button>
 
-      <s-section>
-        <div style={{ border: "1px solid #E3E2DB", borderRadius: 14, overflow: "hidden" }}>
-          <div style={{ background: "#FAF8F3", padding: "32px 28px", textAlign: "center" }}>
-            <div style={{
-              fontFamily: "Georgia, serif", fontSize: 13, letterSpacing: "0.22em",
-              textTransform: "uppercase", color: "#8A6A3F", marginBottom: 10,
-            }}>
-              {shopName}
-            </div>
-            <h2 style={{ fontFamily: "Georgia, serif", fontSize: "clamp(22px,3.4vw,30px)", fontWeight: 600, color: "#2B2620", margin: 0 }}>
-              {campaign.badgeText}
-            </h2>
-            <p style={{ color: "#6B7177", fontSize: "12.5px", marginTop: 10 }}>
-              Previewing the campaign window: {new Date(campaign.startAt).toLocaleDateString()}
-              {campaign.endAt ? ` – ${new Date(campaign.endAt).toLocaleDateString()}` : " (no end date)"}
-            </p>
-          </div>
+      <s-stack direction="block" gap="base">
+        {!embedOn && (
+          <s-banner tone="warning" heading="Shoppers can't see badges yet">
+            The BadgeFlow app embed is off in your theme. <s-link href="/app/setup">Turn it on</s-link>
+          </s-banner>
+        )}
+        {queuedNote && <s-banner tone="warning">{queuedNote}</s-banner>}
+        {notShown && (
+          <s-banner tone="warning">
+            None of this campaign&apos;s products fit in your plan&apos;s product limit right now, so it shows no badges.{" "}
+            <s-link href="/app/plan">See plans</s-link>
+          </s-banner>
+        )}
 
-          <div style={{
-            display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16,
-            padding: "24px 28px 30px", background: "#FAF8F3",
-          }}>
-            {products.length === 0 && (
-              <s-text color="subdued">No products found in this store yet.</s-text>
-            )}
-            {products.map((p) => (
-              <div key={p.id} style={{ background: "#fff", borderRadius: 10, overflow: "hidden", border: "1px solid #EADFCB" }}>
-                <div style={{ position: "relative", aspectRatio: "1/1", background: "#F1ECDD" }}>
-                  {p.imageUrl && (
-                    <img src={p.imageUrl} alt={p.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  )}
-                  <span style={badgeStyle()}>{campaign.badgeText}</span>
-                </div>
-                <div style={{ padding: "10px 12px", fontSize: 12.5 }}>
-                  <b style={{ display: "block" }}>{p.title}</b>
-                  <span style={{ color: "#6B7177" }}>{p.price} {p.currency}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <s-section heading="Campaign">
+          <s-stack direction="block" gap="small-200">
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              <s-badge tone={statusTone(status)}>{statusLabel(status)}</s-badge>
+              <s-text>{schedule}</s-text>
+            </s-stack>
+            <s-text color="subdued" fontSize="small">
+              Products: {campaign.target} · Position: {positionLabel(campaign.position)} · {campaign.size}%
+              {campaign.mobile ? ` · Mobile: ${campaign.mobile}` : ""} · Times in {timezone}
+            </s-text>
+          </s-stack>
+        </s-section>
 
-        <s-box paddingBlockStart="base">
-          <s-text color="subdued" fontSize="small">
-            Badges appear only while a campaign is active — shoppers never see them outside the scheduled window.
-          </s-text>
-        </s-box>
-        <s-box paddingBlockStart="base">
-          <s-button href="/app/campaigns" variant="secondary">← Back to campaigns</s-button>
-        </s-box>
-      </s-section>
+        <s-section heading={`How it looks at ${shopName}`}>
+          {products.length === 0 ? (
+            <s-paragraph color="subdued">
+              No products to preview — this campaign isn&apos;t badging any products right now.
+            </s-paragraph>
+          ) : (
+            <s-grid gridTemplateColumns="repeat(auto-fill, minmax(160px, 1fr))" gap="base">
+              {products.map((p) => (
+                <s-box key={p.id} border="base" borderRadius="base" overflow="hidden">
+                  <div style={{ position: "relative", aspectRatio: "1/1", background: "#F1F1F1" }}>
+                    {p.imageUrl ? (
+                      <img src={p.imageUrl} alt={p.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <s-icon type="image" tone="neutral" />
+                      </div>
+                    )}
+                    <span style={badgeStyle(campaign.position, campaign.size, campaign.badgeColor)}>{campaign.badgeText}</span>
+                  </div>
+                  <s-box padding="small-200">
+                    <s-text fontWeight="bold">{p.title}</s-text>
+                    <s-text color="subdued" fontSize="small">{p.price}</s-text>
+                  </s-box>
+                </s-box>
+              ))}
+            </s-grid>
+          )}
+          <s-box paddingBlockStart="base">
+            <s-text color="subdued" fontSize="small">
+              A close approximation — your theme decides the exact card layout. Badges only appear during the
+              campaign&apos;s schedule.
+            </s-text>
+          </s-box>
+        </s-section>
+      </s-stack>
     </s-page>
   );
 }

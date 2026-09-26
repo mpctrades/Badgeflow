@@ -17,7 +17,21 @@
       "designMode": {{ request.design_mode | json }},
       "showSample": {{ block.settings.show_sample | json }},
       "productHandle": {% if template.name == 'product' and product %}{{ product.handle | json }}{% else %}null{% endif %},
-      "productAvailable": {% if template.name == 'product' and product %}{{ product.available | json }}{% else %}null{% endif %}
+      "productAvailable": {% if template.name == 'product' and product %}{{ product.available | json }}{% else %}null{% endif %},
+      "soldOut": [
+        {%- assign bf_first = true -%}
+        {%- if template.name == 'collection' and collection -%}
+          {%- for p in collection.products limit: 50 -%}
+            {%- unless p.available -%}{%- unless bf_first -%},{%- endunless -%}{{ p.handle | json }}{%- assign bf_first = false -%}{%- endunless -%}
+          {%- endfor -%}
+        {%- elsif template.name == 'search' and search.performed -%}
+          {%- for item in search.results limit: 50 -%}
+            {%- if item.object_type == 'product' -%}
+              {%- unless item.available -%}{%- unless bf_first -%},{%- endunless -%}{{ item.handle | json }}{%- assign bf_first = false -%}{%- endunless -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+      ]
     }
   </script>
 {%- endif -%}

@@ -1,10 +1,12 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useSearchParams } from "react-router";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { displayStatus, PLANS, type PlanId } from "../lib/campaign";
-import { fetchProductIdsForTarget } from "../lib/shopify-catalog.server";
+import { PLANS, runningWindows, storefrontStatus, type PlanId } from "../lib/campaign";
+import { fetchShopInfo, fetchTotalProductCount } from "../lib/shopify-catalog.server";
+import { badgedProductCount, syncStorefrontIfStale } from "../lib/storefront-sync.server";
+import { formatDateInZone } from "../lib/timezone";
 import { useToast } from "../components/toast";
 import { pricingAdminLink, refreshPlan } from "../lib/billing.server";
 
@@ -15,27 +17,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Shopify redirects here after the merchant approves a plan (the plan's
   // welcome link), so skip the cache and read the new plan straight away.
   const force = url.searchParams.has("plan_handle") || url.searchParams.has("refresh");
-  const [campaigns, billing] = await Promise.all([
+  const [campaigns, billing, totalProducts, shopInfo] = await Promise.all([
     db.campaign.findMany({ where: { shop: session.shop } }),
     refreshPlan(admin, session.shop, { force }),
+    fetchTotalProductCount(admin),
+    fetchShopInfo(admin),
   ]);
+  // After a plan change refreshPlan has already republished the storefront.
+  const sync = await syncStorefrontIfStale(admin, session.shop);
 
-  const live = campaigns.filter((c) => displayStatus(c) === "live");
-  const scheduledCount = campaigns.filter((c) => displayStatus(c) === "scheduled").length;
-
-  // Real metering: union of distinct product IDs across live campaigns, so a
-  // product in two campaigns still counts once.
-  const idSets = await Promise.all(live.map((c) => fetchProductIdsForTarget(admin, c)));
-  const badgedProductIds = new Set(idSets.flat());
-  const overlapExists = idSets.reduce((sum, s) => sum + s.length, 0) > badgedProductIds.size;
+  // Campaigns that want to run: live or scheduled by their dates.
+  const windows = runningWindows(campaigns, "unlimited");
+  const statuses = campaigns.map((c) => storefrontStatus(c, windows));
+  const live = statuses.filter((st) => st === "live");
+  const scheduledCount = statuses.filter((st) => st === "scheduled").length;
 
   return {
     liveCampaignCount: live.length,
     scheduledCount,
-    badgedProductCount: badgedProductIds.size,
-    overlapExists,
+    // What the storefront shows now, with the current plan's limits applied.
+    badgedProductCount: badgedProductCount(sync.config, totalProducts),
     plan: billing.plan,
     billing,
+    trialEnds: billing.trialEndsAt ? formatDateInZone(billing.trialEndsAt, shopInfo.ianaTimezone) : null,
     // App Bridge turns shopify:admin links into top-level admin navigation,
     // which is how an embedded app reaches Shopify's plan selection page.
     pricingUrl: pricingAdminLink(),
@@ -50,14 +54,12 @@ const FEATURES: Record<PlanId, { label: string; included: boolean }[]> = {
     { label: `Badges on ${PLANS.free.limit} products`, included: true },
     { label: `${PLANS.free.liveCampaignLimit} campaign live at a time`, included: true },
     { label: "Full badge library and scheduling", included: true },
-    { label: "Multi-badge and priority rules", included: false },
-    { label: "Your own AI key", included: false },
+    { label: "Up to 3 badges stacked on one product", included: false },
   ],
   premium: [
     { label: `Badges on ${PLANS.premium.limit} products`, included: true },
     { label: "Unlimited live campaigns", included: true },
-    { label: "Multi-badge and priority rules", included: true },
-    { label: "Your own AI key and MCP — coming soon", included: true },
+    { label: "Up to 3 badges stacked on one product", included: true },
   ],
   unlimited: [
     { label: "Everything in Premium", included: true },
@@ -75,9 +77,6 @@ const TAGLINES: Record<PlanId, string> = {
 const CSS = `
 .bfp-muted { font-size: 12px; color: #616161; }
 .bfp-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.bfp-toggle { display: inline-flex; background: #F1F1F1; border-radius: 8px; padding: 3px; }
-.bfp-toggle button { border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 6px; cursor: pointer; color: #616161; }
-.bfp-toggle button[aria-pressed="true"] { background: #303030; color: #fff; }
 .bfp-strip { display: grid; grid-template-columns: 160px minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .bfp-eyebrow { font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: #616161; }
 .bfp-bar { height: 6px; border-radius: 3px; background: #EBEBEB; overflow: hidden; margin: 6px 0; }
@@ -103,7 +102,7 @@ function monthlyPrice(id: PlanId): number {
 }
 
 export default function Plan() {
-  const { liveCampaignCount, scheduledCount, badgedProductCount, overlapExists, plan, billing, pricingUrl } =
+  const { liveCampaignCount, scheduledCount, badgedProductCount, plan, billing, trialEnds, pricingUrl } =
     useLoaderData<typeof loader>();
   // Shopify redirects to /app/plan?plan_handle=… after the merchant approves a plan.
   const { show } = useToast();
@@ -116,7 +115,6 @@ export default function Plan() {
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [annual, setAnnual] = useState(false);
 
   const current = PLANS[plan];
   const limit = current.limit;
@@ -151,11 +149,8 @@ export default function Plan() {
   }
 
   function priceLine(id: PlanId) {
-    const monthly = monthlyPrice(id);
-    if (monthly === 0) return { amount: "$0", period: "for life" };
-    return annual
-      ? { amount: `$${(monthly * 10).toFixed(2)}`, period: "/year" }
-      : { amount: PLANS[id].price, period: PLANS[id].period };
+    if (monthlyPrice(id) === 0) return { amount: "$0", period: "for life" };
+    return { amount: PLANS[id].price, period: PLANS[id].period };
   }
 
   return (
@@ -164,10 +159,6 @@ export default function Plan() {
       <div className="bfp-row" style={{ marginTop: -4, marginBottom: 16, flexWrap: "wrap" }}>
         <div className="bfp-muted" style={{ fontSize: 13 }}>
           Change or cancel any time — billed through Shopify with your store invoice.
-        </div>
-        <div className="bfp-toggle" role="group" aria-label="Billing period">
-          <button type="button" aria-pressed={!annual} onClick={() => setAnnual(false)}>Monthly</button>
-          <button type="button" aria-pressed={annual} onClick={() => setAnnual(true)}>Annual — 2 months free</button>
         </div>
       </div>
 
@@ -181,9 +172,7 @@ export default function Plan() {
                 {monthlyPrice(plan) === 0 ? "$0 for life" : `${current.price}${current.period}`}
               </span>
             </div>
-            {billing.trialEndsAt && (
-              <div className="bfp-muted">Free trial until {new Date(billing.trialEndsAt).toLocaleDateString()}</div>
-            )}
+            {trialEnds && <div className="bfp-muted">Free trial until {trialEnds}</div>}
             {billing.cancelAtEndOfCycle && <div className="bfp-muted">Cancels at the end of this billing cycle</div>}
             {billing.pendingPlan && billing.pendingPlan !== plan && (
               <div className="bfp-muted">Changes to {PLANS[billing.pendingPlan].label} next billing cycle</div>
@@ -199,10 +188,10 @@ export default function Plan() {
               <div style={{ width: `${pct(badgedProductCount, limit)}%`, background: barColor(badgedProductCount, limit) }} />
             </div>
             <div className="bfp-muted">
-              {limit !== Infinity && badgedProductCount > limit
-                ? `${badgedProductCount - limit} products are past the limit and show no badge — nothing breaks.`
+              {limit !== Infinity && badgedProductCount >= limit
+                ? "Limit reached — any other targeted products show no badge until you upgrade."
                 : "Products past the limit simply show no badge — nothing breaks."}
-              {overlapExists && " A product in two live campaigns counts once."}
+              {" A product in two live campaigns counts once."}
             </div>
           </div>
           <div>
@@ -240,9 +229,6 @@ export default function Plan() {
               <div className="bfp-price">
                 {price.amount} <span>{price.period}</span>
               </div>
-              {annual && monthlyPrice(id) > 0 && (
-                <div className="bfp-muted">${(monthlyPrice(id) * 2).toFixed(2)} saved vs monthly</div>
-              )}
               <div className="bfp-muted" style={{ marginTop: 8, fontSize: 13 }}>{planPitch(id)}</div>
               <ul className="bfp-list">
                 {FEATURES[id].map((f) => (
@@ -275,7 +261,8 @@ export default function Plan() {
         Downgrading keeps every campaign — badges beyond the new limit stop showing until you upgrade again. Nothing is deleted.
       </div>
       <div className="bfp-muted" style={{ marginTop: 6 }}>
-        Charges appear on your Shopify invoice. Declining on Shopify&apos;s page keeps you on your current plan.
+        Charges appear on your Shopify invoice. Shopify&apos;s plan page shows every billing option, including any
+        annual pricing. Declining there keeps you on your current plan.
       </div>
     </s-page>
   );

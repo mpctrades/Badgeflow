@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { forgetPlan } from "../lib/billing.server";
+import { forgetStorefrontSync } from "../lib/storefront-sync.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, session, topic } = await authenticate.webhook(request);
@@ -15,10 +16,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   // Shopify cancels app subscriptions on uninstall, so a reinstall must start
-  // on Free and go through charge approval again. Campaigns are kept until
-  // shop/redact in case the merchant comes back.
-  await db.shopSettings.updateMany({ where: { shop }, data: { plan: "free" } });
+  // on Free and go through charge approval again. The app embed is removed
+  // with the app, so it has to be switched on again too. Campaigns are kept
+  // until shop/redact in case the merchant comes back.
+  await db.shopSettings.updateMany({ where: { shop }, data: { plan: "free", planCheckedAt: null, embedConfirmedAt: null } });
   forgetPlan(shop);
+  forgetStorefrontSync(shop);
 
   return new Response();
 };

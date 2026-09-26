@@ -12,7 +12,7 @@ embedded = true
 scopes = "read_products"
 
 [webhooks]
-api_version = "2026-10"
+api_version = "2026-07"
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/uninstalled"
@@ -38,7 +38,7 @@ api_version = "2026-10"
   compliance_topics = [ "shop/redact" ]
 
 [auth]
-redirect_urls = [ "https://dev.badgeflow.mpctrades.com/auth/callback", "https://dev.badgeflow.mpctrades.com/auth/shopify/callback", "https://dev.badgeflow.mpctrades.com/api/auth/callback" ]
+redirect_urls = [ "https://dev.badgeflow.mpctrades.com/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true

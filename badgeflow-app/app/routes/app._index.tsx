@@ -3,9 +3,12 @@ import { Link, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
-import { BRAND, displayStatus, PLANS, setupSteps, statusLabel, statusTone, type PlanId } from "../lib/campaign";
-import { fetchPreviewProducts, fetchProductIdsForTarget, fetchShopInfo } from "../lib/shopify-catalog.server";
-import { syncStorefront } from "../lib/storefront-sync.server";
+import {
+  BRAND, PLANS, productsLabel, runningWindows, setupSteps, statusLabel, statusTone, storefrontStatus, type PlanId,
+} from "../lib/campaign";
+import { fetchPreviewProducts, fetchShopInfo, fetchTotalProductCount, formatPrice } from "../lib/shopify-catalog.server";
+import { badgedProductCount, syncStorefrontIfStale } from "../lib/storefront-sync.server";
+import { useEmbedStatus } from "../lib/use-embed-status";
 
 // All dates are formatted on the server in the shop's timezone, so the
 // dashboard reads the same as the storefront schedule and hydration is stable.
@@ -26,64 +29,51 @@ function dateFormatters(timeZone: string) {
   };
 }
 
-function formatPrice(amount: string, currency: string): string {
-  try {
-    return new Intl.NumberFormat("en", { style: "currency", currency, currencyDisplay: "narrowSymbol" }).format(Number(amount));
-  } catch {
-    return `${amount} ${currency}`;
-  }
-}
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const now = new Date();
 
-  const [campaigns, settings, previewProducts, shopInfo] = await Promise.all([
+  const [campaigns, settings, shopInfo, totalProducts, sync] = await Promise.all([
     db.campaign.findMany({ where: { shop: session.shop }, orderBy: { createdAt: "desc" } }),
     db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
-    fetchPreviewProducts(admin, 3),
     fetchShopInfo(admin),
-    // Opening the app refreshes the storefront copy (e.g. collection membership).
-    syncStorefront(admin, session.shop),
+    fetchTotalProductCount(admin),
+    // Keeps collection membership fresh on the storefront, at most every
+    // few minutes rather than on every visit.
+    syncStorefrontIfStale(admin, session.shop),
   ]);
   const fmt = dateFormatters(shopInfo.ianaTimezone);
 
-  const withStatus = campaigns.map((c) => ({ ...c, computedStatus: displayStatus(c, now) }));
-  const live = withStatus.filter((c) => c.computedStatus === "live");
-  const scheduled = withStatus
-    .filter((c) => c.computedStatus === "scheduled")
-    .sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
-  const recent = withStatus.slice(0, 3);
-
-  // Resolve targets once for every campaign we need a product count for
-  // (live ones for plan metering, recent ones for the table).
-  const needTargets = [...new Map([...live, ...recent].map((c) => [c.id, c])).values()];
-  const targetIds = new Map(
-    await Promise.all(needTargets.map(async (c) => [c.id, await fetchProductIdsForTarget(admin, c)] as const)),
-  );
-
   const plan = (settings.plan in PLANS ? settings.plan : "free") as PlanId;
   const limit = PLANS[plan].limit;
-  const badgedCount = new Set(live.flatMap((c) => targetIds.get(c.id) ?? [])).size;
+  const windows = runningWindows(campaigns, plan, now);
+  const withStatus = campaigns.map((c) => ({ ...c, computedStatus: storefrontStatus(c, windows, now) }));
+  const live = withStatus.filter((c) => c.computedStatus === "live");
+  const scheduled = withStatus
+    .filter((c) => c.computedStatus === "scheduled" || c.computedStatus === "queued")
+    .sort((a, b) => (windows.get(a.id)?.startAt ?? a.startAt).getTime() - (windows.get(b.id)?.startAt ?? b.startAt).getTime());
+  const recent = withStatus.slice(0, 3);
+
+  // What the storefront enforces right now (plan limits applied).
+  const badgedCount = badgedProductCount(sync.config, totalProducts, now);
 
   const firstLive = live[0] ?? null;
   const liveDetail = firstLive
     ? `${firstLive.badgeLabel} · ${fmt.sameDay(firstLive.startAt, now) ? "started today" : `since ${fmt.dayMonth(firstLive.startAt)}`}`
     : "No campaign live right now";
-  const scheduledDetail = scheduled[0] ? `Next starts ${fmt.dateTime(scheduled[0].startAt)}` : "Nothing scheduled";
+  const nextStart = scheduled[0] ? (windows.get(scheduled[0].id)?.startAt ?? scheduled[0].startAt) : null;
+  const scheduledDetail = scheduled[0]
+    ? windows.has(scheduled[0].id) && nextStart
+      ? `Next starts ${fmt.dateTime(nextStart)}`
+      : `${scheduled[0].badgeLabel} is waiting for a free slot`
+    : "Nothing scheduled";
 
-  // Storefront preview: the live campaign's badge on real products, or the
-  // next scheduled one, or a sample so a new store never looks broken.
+  // Storefront preview: the live campaign's badge on the products it really
+  // targets, or the next scheduled one, or a sample so a new store never
+  // looks broken.
   const previewCampaign = firstLive ?? scheduled[0] ?? null;
-  const previewIds = previewCampaign ? targetIds.get(previewCampaign.id) : undefined;
-  const inPreviewCampaign = (p: { id: string; handle: string }) => {
-    if (!previewCampaign) return true;
-    if (previewCampaign.targetType === "all") return true;
-    if (previewCampaign.targetType === "products") {
-      return previewCampaign.targetRef.split(",").map((h) => h.trim()).includes(p.handle);
-    }
-    return previewIds?.includes(p.id) ?? false;
-  };
+  const published = previewCampaign ? sync.config?.campaigns.find((c) => c.id === previewCampaign.id) : undefined;
+  const previewProducts = await fetchPreviewProducts(admin, 3, published && !published.all ? published.handles : undefined);
 
   const events = [...live, ...scheduled]
     .flatMap((c) => [
@@ -102,20 +92,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
 
   const last = withStatus[0];
-  const duplicateHref = last
-    ? `/app/campaigns/new?${new URLSearchParams({
-        badgeText: last.badgeText,
-        badgeColor: last.badgeColor,
-        position: last.position,
-        size: String(last.size),
-        targetType: last.targetType,
-        targetRef: last.targetRef,
-      })}`
-    : null;
+  // Same design (including mobile settings) and products, with a fresh schedule.
+  const duplicateHref = last ? `/app/campaigns/${last.id}/edit?duplicate=1` : null;
 
   return {
     shopName: shopInfo.name,
     storefrontUrl: `https://${session.shop}`,
+    syncFailed: !sync.ok,
     hasCampaign: campaigns.length > 0,
     embedConfirmed: !!settings.embedConfirmedAt,
     stats: {
@@ -133,7 +116,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         ? { text: previewCampaign.badgeText, color: previewCampaign.badgeColor, position: previewCampaign.position, size: previewCampaign.size }
         : { text: "SALE -20%", color: "#E33C2B", position: "top-left", size: 12 },
       caption: firstLive
-        ? "Your collection page, with the live campaign applied."
+        ? "Products in the live campaign, as shoppers see them."
         : previewCampaign
           ? "How your next scheduled campaign will look."
           : "A sample badge — create a campaign to use your own.",
@@ -142,7 +125,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         title: p.title,
         imageUrl: p.imageUrl,
         price: formatPrice(p.price, p.currency),
-        badged: inPreviewCampaign(p),
+        badged: true,
       })),
     },
     events,
@@ -153,7 +136,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       badgeText: c.badgeText,
       badgeColor: c.badgeColor,
       status: c.computedStatus,
-      products: c.targetType === "all" ? "All products" : `${targetIds.get(c.id)?.length ?? 0} products`,
+      products: productsLabel(c),
       schedule: c.isDraft ? "Draft" : scheduleLabel(c),
     })),
     duplicateHref,
@@ -171,11 +154,6 @@ const CSS = `
 .bf-muted { font-size: 12px; color: #616161; }
 .bf-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .bf-pill { display: inline-block; padding: 3px 7px; border-radius: 4px; color: #fff; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
-.bf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.bf-table th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: #616161; padding: 8px 8px 8px 0; border-bottom: 1px solid #EBEBEB; }
-.bf-table td { padding: 11px 8px 11px 0; border-bottom: 1px solid #F1F1F1; vertical-align: middle; }
-.bf-table tr:last-child td { border-bottom: 0; }
-.bf-table .bf-right { text-align: right; padding-right: 0; }
 .bf-timeline { list-style: none; margin: 0; padding: 0; }
 .bf-timeline li { position: relative; padding: 0 0 14px 20px; }
 .bf-timeline li:last-child { padding-bottom: 0; }
@@ -214,8 +192,10 @@ function badgeOverlayStyle(badge: { color: string; position: string; size: numbe
 
 export default function Index() {
   const {
-    shopName, storefrontUrl, hasCampaign, embedConfirmed, stats, preview, events, totalCampaigns, recent, duplicateHref,
+    shopName, storefrontUrl, syncFailed, hasCampaign, embedConfirmed: embedStored, stats, preview, events, totalCampaigns, recent,
+    duplicateHref,
   } = useLoaderData<typeof loader>();
+  const embedConfirmed = useEmbedStatus(embedStored).active;
   const steps = setupSteps({ embedConfirmed, hasCampaign });
   const doneCount = steps.filter((s) => s.done).length;
   const nextStep = steps.find((s) => !s.done);
@@ -223,9 +203,11 @@ export default function Index() {
   const usagePct = stats.limit ? Math.min(100, (stats.badgedCount / stats.limit) * 100) : 100;
   const slotsLeft = stats.limit ? stats.limit - stats.badgedCount : null;
 
-  const subheading = stats.live > 0
+  const subheading = stats.live > 0 && embedConfirmed
     ? `${shopName} · badges are showing on your storefront`
-    : `${shopName} · no badges are showing yet`;
+    : stats.live > 0
+      ? `${shopName} · turn on the app embed so shoppers can see your badges`
+      : `${shopName} · no badges are showing yet`;
 
   return (
     <s-page heading="Welcome back" inlineSize="large">
@@ -239,6 +221,11 @@ export default function Index() {
 
       <div className="bf-grid" style={{ gap: 16 }}>
         <div className="bf-muted" style={{ fontSize: 13, marginTop: -4 }}>{subheading}</div>
+        {syncFailed && (
+          <s-banner tone="warning" heading="Your storefront may be out of date">
+            BadgeFlow couldn&apos;t update your storefront just now. Reload this page in a minute to try again.
+          </s-banner>
+        )}
         <div className="bf-grid bf-stats">
           <s-section>
             <div className="bf-eyebrow">
@@ -269,14 +256,14 @@ export default function Index() {
             </div>
             {stats.limit && (
               <div style={{ height: 6, borderRadius: 3, background: "#EBEBEB", overflow: "hidden", margin: "6px 0" }}>
-                <div style={{ width: `${usagePct}%`, height: "100%", background: slotsLeft! < 0 ? "#C70A24" : "#303030" }} />
+                <div style={{ width: `${usagePct}%`, height: "100%", background: slotsLeft! <= 0 ? "#B98900" : "#303030" }} />
               </div>
             )}
             <div className="bf-muted" style={{ color: slotsLeft !== null && slotsLeft <= 5 ? "#8E1F0B" : undefined }}>
               {slotsLeft === null
                 ? `Unlimited on the ${stats.planLabel} plan`
-                : slotsLeft < 0
-                  ? `${-slotsLeft} over the ${stats.planLabel} plan limit`
+                : slotsLeft <= 0
+                  ? `Limit reached — extra products show no badge on ${stats.planLabel}`
                   : `${slotsLeft} slot${slotsLeft === 1 ? "" : "s"} left on the ${stats.planLabel} plan`}
             </div>
           </s-section>
@@ -309,7 +296,7 @@ export default function Index() {
                         {p.badged && <span style={badgeOverlayStyle(preview.badge)}>{preview.badge.text}</span>}
                       </div>
                       <div style={{ fontSize: 13, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                      <div className="bf-muted">{p.badged ? p.price : "Not in this campaign"}</div>
+                      <div className="bf-muted">{p.price}</div>
                     </div>
                   ))}
                 </div>
@@ -327,31 +314,29 @@ export default function Index() {
                   <div><s-button href="/app/campaigns/new">Create campaign</s-button></div>
                 </s-stack>
               ) : (
-                <table className="bf-table">
-                  <thead>
-                    <tr>
-                      <th>Badge</th>
-                      <th className="bf-hide-sm">Products</th>
-                      <th className="bf-hide-sm">Schedule</th>
-                      <th className="bf-right">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <s-table variant="list">
+                  <s-table-header-row>
+                    <s-table-header listSlot="primary">Badge</s-table-header>
+                    <s-table-header listSlot="labeled">Products</s-table-header>
+                    <s-table-header listSlot="labeled">Schedule</s-table-header>
+                    <s-table-header listSlot="secondary">Status</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
                     {recent.map((c) => (
-                      <tr key={c.id}>
-                        <td>
+                      <s-table-row key={c.id}>
+                        <s-table-cell>
                           <Link to={`/app/campaigns/${c.id}/edit`} style={{ display: "flex", alignItems: "center", gap: 10, color: "inherit", textDecoration: "none" }}>
                             <span className="bf-pill" style={{ background: c.badgeColor }}>{c.badgeText}</span>
                             <span>{c.name}</span>
                           </Link>
-                        </td>
-                        <td className="bf-hide-sm bf-muted">{c.products}</td>
-                        <td className="bf-hide-sm bf-muted">{c.schedule}</td>
-                        <td className="bf-right"><s-badge tone={statusTone(c.status)}>{statusLabel(c.status)}</s-badge></td>
-                      </tr>
+                        </s-table-cell>
+                        <s-table-cell>{c.products}</s-table-cell>
+                        <s-table-cell>{c.schedule}</s-table-cell>
+                        <s-table-cell><s-badge tone={statusTone(c.status)}>{statusLabel(c.status)}</s-badge></s-table-cell>
+                      </s-table-row>
                     ))}
-                  </tbody>
-                </table>
+                  </s-table-body>
+                </s-table>
               )}
             </s-section>
           </div>
@@ -385,7 +370,7 @@ export default function Index() {
                     <s-icon type="check-circle" tone="success" />
                     <s-text fontWeight="bold">Setup complete</s-text>
                   </div>
-                  <s-text color="subdued" fontSize="small">Theme block on, first campaign live, storefront checked.</s-text>
+                  <s-text color="subdued" fontSize="small">App embed on and your first campaign created. Open your storefront any time to check how badges look.</s-text>
                   <div><s-button href="/app/setup">Review setup</s-button></div>
                 </s-stack>
               )}
@@ -393,8 +378,8 @@ export default function Index() {
 
             <s-section heading="Shortcuts">
               <div>
-                <Link className="bf-shortcut" to="/app/ai">
-                  Draft a campaign with AI (Beta) <s-icon type="chevron-right" size="small" />
+                <Link className="bf-shortcut" to="/app/setup">
+                  Store setup and help <s-icon type="chevron-right" size="small" />
                 </Link>
                 {duplicateHref && (
                   <Link className="bf-shortcut" to={duplicateHref}>

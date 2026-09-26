@@ -29,6 +29,11 @@
   var config = readJson("badgeflow-config") || {};
   var context = readJson("badgeflow-context") || {};
   var rules = config.rules || {};
+  // Sold-out products on this collection or search page (from Liquid).
+  var soldOut = new Set((context.soldOut || []).map(function (h) { return String(h).toLowerCase(); }));
+  // Links in these areas are navigation, not product cards.
+  var SKIP_AREAS = "header, nav, footer, [role='navigation'], .breadcrumb, .breadcrumbs, [aria-label='breadcrumb'], .cart-drawer, cart-drawer, .predictive-search";
+  var MIN_IMAGE_PX = 60;
 
   function activeCampaigns() {
     var now = Date.now();
@@ -126,18 +131,36 @@
     });
   }
 
+  // True when `el` holds links to more than one product: it's a grid or a
+  // list, not a single product card.
+  function spansProducts(el, handle) {
+    var links = el.querySelectorAll('a[href*="/products/"]');
+    for (var i = 0; i < links.length; i++) {
+      var h = handleFromHref(links[i].getAttribute("href"));
+      if (h && h !== handle) return true;
+    }
+    return false;
+  }
+
   function badgeCards(active) {
     var seen = new Set();
     document.querySelectorAll('a[href*="/products/"]').forEach(function (a) {
+      if (a.closest(SKIP_AREAS)) return;
       var handle = handleFromHref(a.getAttribute("href"));
       if (!handle) return;
-      // Walk up to the card: the nearest ancestor that contains a product image.
+      if (rules.hideSoldOut !== false && soldOut.has(handle)) return;
+      // Walk up to the card: the nearest ancestor that contains a product
+      // image, without climbing into a container shared with other products.
       var card = a, img = a.querySelector("img");
       for (var i = 0; !img && card && i < 6; i++) {
-        card = card.parentElement;
-        img = card && card.querySelector("img");
+        var parent = card.parentElement;
+        if (!parent || spansProducts(parent, handle)) break;
+        card = parent;
+        img = card.querySelector("img");
       }
       if (!img) return;
+      var rect = img.getBoundingClientRect();
+      if (rect.width && rect.width < MIN_IMAGE_PX) return;
       var container = mediaContainerFor(img);
       if (!container || seen.has(container)) return;
       seen.add(container);

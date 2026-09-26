@@ -6,7 +6,8 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { BADGE_PRESETS, POSITIONS, positionLabel } from "../lib/badges";
 import { BRAND } from "../lib/campaign";
-import { fetchPreviewProducts } from "../lib/shopify-catalog.server";
+import { fetchPreviewProducts, formatPrice } from "../lib/shopify-catalog.server";
+import { useEmbedStatus } from "../lib/use-embed-status";
 import { useActionToast } from "../lib/use-toast";
 import type { CallbackEvent } from "@shopify/polaris-types";
 import { syncStorefront } from "../lib/storefront-sync.server";
@@ -27,15 +28,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     fetchPreviewProducts(admin, 1),
   ]);
   const product = previewProducts[0] ?? null;
-  let price: string | null = null;
-  if (product) {
-    try {
-      price = new Intl.NumberFormat("en", { style: "currency", currency: product.currency, currencyDisplay: "narrowSymbol" })
-        .format(Number(product.price));
-    } catch {
-      price = `${product.price} ${product.currency}`;
-    }
-  }
+  const price = product ? formatPrice(product.price, product.currency) : null;
   return {
     settings,
     // Stacking several badges on one product is a Premium feature.
@@ -68,8 +61,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     create: { shop: session.shop, ...data },
   });
 
-  await syncStorefront(admin, session.shop);
-  return { ok: true, saved: true, savedAt: Date.now(), message: "Settings saved" };
+  const { ok } = await syncStorefront(admin, session.shop);
+  return ok
+    ? { ok: true, saved: true, savedAt: Date.now(), message: "Settings saved" }
+    : {
+        ok: false,
+        isError: true,
+        saved: true,
+        savedAt: Date.now(),
+        message: "Settings saved, but your storefront couldn't be updated. Try saving again in a minute.",
+      };
 };
 
 const CSS = `
@@ -89,7 +90,6 @@ const CSS = `
 .bfst-pos:focus-visible { outline: 2px solid ${BRAND}; outline-offset: 2px; }
 .bfst-pos-mark { position: absolute; width: 36%; height: 12%; border-radius: 2px; background: #C9C9C9; }
 .bfst-pos[aria-pressed="true"] .bfst-pos-mark { background: var(--bfst-color); }
-.bfst-range { width: 100%; accent-color: #303030; margin: 6px 0 2px; }
 .bfst-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
 .bfst-swatch { width: 28px; height: 28px; border-radius: 6px; border: 2px solid transparent; box-shadow: 0 0 0 1px #E3E3E3; cursor: pointer; padding: 0; }
 .bfst-swatch[aria-pressed="true"] { border-color: #fff; box-shadow: 0 0 0 2px #303030; }
@@ -145,6 +145,7 @@ type FormState = {
 
 export default function Settings() {
   const { settings, canStack, previewProduct } = useLoaderData<typeof loader>();
+  const embedOn = useEmbedStatus(!!settings.embedConfirmedAt).active;
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const submit = useSubmit();
@@ -240,26 +241,19 @@ export default function Settings() {
                 </div>
               </div>
               <div>
-                <div className="bfst-label" style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <label htmlFor="bfst-size">Default size</label>
-                  <span className="bfst-muted" style={{ fontWeight: 400 }}>{form.defaultSize}% of the product image width</span>
-                </div>
-                <input
-                  id="bfst-size"
-                  className="bfst-range"
-                  type="range"
+                <s-number-field
+                  label="Default size"
+                  value={String(form.defaultSize)}
                   min={MIN_SIZE}
                   max={MAX_SIZE}
                   step={1}
-                  value={form.defaultSize}
-                  onChange={(e) => set("defaultSize", Number(e.currentTarget.value))}
+                  suffix="%"
+                  details="Share of the product image width, so the badge stays in proportion on phones and large grids."
+                  onChange={(e: CallbackEvent<"s-number-field">) => {
+                    const n = Math.round(Number(e.currentTarget.value));
+                    if (Number.isFinite(n)) set("defaultSize", Math.min(MAX_SIZE, Math.max(MIN_SIZE, n)));
+                  }}
                 />
-                <div className="bfst-muted" style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span>Small</span><span>Large</span>
-                </div>
-                <div className="bfst-muted" style={{ marginTop: 10 }}>
-                  Sizes are relative, so the badge stays in proportion on phones and on large desktop grids.
-                </div>
 
                 <div className="bfst-label" style={{ marginTop: 18 }}>Default colour</div>
                 <div className="bfst-swatches" role="group" aria-label="Default colour">
@@ -289,7 +283,10 @@ export default function Settings() {
               />
               <div>
                 <s-text fontWeight="bold">Hide badges on sold-out products</s-text>
-                <div className="bfst-muted">A sale badge on an unavailable product frustrates shoppers.</div>
+                <div className="bfst-muted">
+                  A sale badge on an unavailable product frustrates shoppers. Applies on product, collection and search
+                  pages; cards in other sections (like a home page carousel) can still show the badge.
+                </div>
               </div>
             </div>
             <div className="bfst-rule bfst-toggle-row">
@@ -346,17 +343,9 @@ export default function Settings() {
 
             <div className="bfst-divider" />
 
-            <s-text fontWeight="bold">AI assistant (Beta)</s-text>
-            <div className="bfst-muted" style={{ margin: "2px 0 10px" }}>
-              Get a sample draft campaign to start from, then change anything in the builder. Nothing goes live until you publish.
-            </div>
-            <s-button href="/app/ai">Open AI assistant</s-button>
-
-            <div className="bfst-divider" />
-
             <div className="bfst-muted">
-              Theme block status: {settings.embedConfirmedAt ? "enabled" : "not confirmed yet"}.{" "}
-              <Link to="/app/setup">{settings.embedConfirmedAt ? "Recheck" : "Set it up"}</Link>
+              App embed: {embedOn ? "on in your live theme" : "off in your live theme"}.{" "}
+              <Link to="/app/setup">{embedOn ? "Store setup" : "Turn it on"}</Link>
             </div>
           </s-section>
         </div>

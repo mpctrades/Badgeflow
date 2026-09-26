@@ -1,49 +1,42 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useEffect, useState } from "react";
-import { Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { displayStatus, PLANS, setupSteps, type PlanId } from "../lib/campaign";
-import { fetchPreviewProducts, fetchProductIdsForTarget } from "../lib/shopify-catalog.server";
+import { PLANS, productsLabel, runningWindows, setupSteps, storefrontStatus, type PlanId } from "../lib/campaign";
+import { fetchPreviewProducts, fetchTotalProductCount, formatPrice } from "../lib/shopify-catalog.server";
 import { useActionToast } from "../lib/use-toast";
-import { EMBED_HANDLE, themeEditorEmbedLink } from "../lib/storefront-sync.server";
+import { useEmbedStatus } from "../lib/use-embed-status";
+import { badgedProductCount, syncStorefrontIfStale, themeEditorEmbedLink } from "../lib/storefront-sync.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  const [settings, campaigns, previewProducts] = await Promise.all([
+  const [settings, campaigns, previewProducts, totalProducts, sync] = await Promise.all([
     db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
     db.campaign.findMany({ where: { shop: session.shop }, orderBy: { createdAt: "desc" } }),
     fetchPreviewProducts(admin, 1),
+    fetchTotalProductCount(admin),
+    syncStorefrontIfStale(admin, session.shop),
   ]);
 
-  const live = campaigns.filter((c) => displayStatus(c) === "live");
-  const liveIds = await Promise.all(live.map((c) => fetchProductIdsForTarget(admin, c)));
-  const badgedProductCount = new Set(liveIds.flat()).size;
+  const plan = (settings.plan in PLANS ? settings.plan : "free") as PlanId;
+  const windows = runningWindows(campaigns, plan);
+  const live = campaigns.filter((c) => storefrontStatus(c, windows) === "live");
 
   // Summary line for the "campaign created" step: prefer a live campaign.
   const featured = live[0] ?? campaigns[0] ?? null;
-  const featuredIdx = featured ? live.indexOf(featured) : -1;
-  const featuredProducts = featured
-    ? featured.targetType === "all"
-      ? "all products"
-      : `${(featuredIdx >= 0 ? liveIds[featuredIdx]! : await fetchProductIdsForTarget(admin, featured)).length} products`
-    : null;
-
-  const plan = (settings.plan in PLANS ? settings.plan : "free") as PlanId;
   const product = previewProducts[0] ?? null;
 
   return {
     settings,
     campaignCount: campaigns.length,
     storefrontUrl: `https://${session.shop}`,
-    embedHandle: EMBED_HANDLE,
     // eslint-disable-next-line no-undef
     editorLink: themeEditorEmbedLink(process.env.SHOPIFY_API_KEY || ""),
     featured: featured
       ? {
           name: featured.badgeLabel,
-          isLive: featuredIdx >= 0,
-          products: featuredProducts,
+          isLive: live.includes(featured),
+          products: productsLabel(featured).toLowerCase(),
           badgeText: featured.badgeText,
           badgeColor: featured.badgeColor,
         }
@@ -56,17 +49,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
       : null,
     plan,
-    badgedProductCount,
+    badgedProductCount: badgedProductCount(sync.config, totalProducts),
   };
 };
-
-function formatPrice(amount: string, currency: string): string {
-  try {
-    return new Intl.NumberFormat("en", { style: "currency", currency, currencyDisplay: "narrowSymbol" }).format(Number(amount));
-  } catch {
-    return `${amount} ${currency}`;
-  }
-}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -108,10 +93,6 @@ const CSS = `
 .bfs-dot-todo { background: #fff; color: #616161; border: 1px solid #D4D4D4; }
 .bfs-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #F1F1F1; color: #303030; white-space: nowrap; }
 .bfs-card { width: 150px; flex: 0 0 150px; border: 1px solid #E3E3E3; border-radius: 8px; overflow: hidden; background: #fff; }
-.bfs-help summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 11px 0; font-size: 13px; border-bottom: 1px solid #F1F1F1; }
-.bfs-help summary::-webkit-details-marker { display: none; }
-.bfs-help[open] summary s-icon { transform: rotate(90deg); }
-.bfs-help p { margin: 8px 0 12px; font-size: 12px; color: #616161; }
 @media (max-width: 900px) { .bfs-main { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 480px) { .bfs-preview { flex-direction: column; } }
 `;
@@ -132,43 +113,16 @@ const HELP = [
 ];
 
 export default function Setup() {
-  const { settings, campaignCount, storefrontUrl, embedHandle, editorLink, featured, product, plan, badgedProductCount } =
+  const { settings, campaignCount, storefrontUrl, editorLink, featured, product, plan, badgedProductCount } =
     useLoaderData<typeof loader>();
-  // Embed status straight from Shopify (App Bridge app.extensions(): no
-  // scopes, no theme file access). null = not known yet / API unavailable.
-  const [embedActive, setEmbedActive] = useState<boolean | null>(null);
-  const [embedAutoChecked, setEmbedAutoChecked] = useState(false);
-  const statusFetcher = useFetcher();
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const api = (window as unknown as { shopify?: { app?: { extensions?: () => Promise<{ type: string; activations: { handle: string; status: string }[] }[]> } } }).shopify?.app;
-        if (!api?.extensions) return;
-        const extensions = await api.extensions();
-        const active = extensions
-          .filter((e) => e.type === "theme_app_extension")
-          .some((e) => e.activations.some((a) => a.handle === embedHandle && a.status === "active"));
-        if (cancelled) return;
-        setEmbedActive(active);
-        setEmbedAutoChecked(true);
-        if (active !== !!settings.embedConfirmedAt) {
-          statusFetcher.submit({ intent: "embed-status", active: active ? "1" : "0" }, { method: "post" });
-        }
-      } catch {
-        // Fall back to the merchant's manual confirmation.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Embed status straight from Shopify; falls back to the merchant's own
+  // confirmation when App Bridge can't answer.
+  const embed = useEmbedStatus(!!settings.embedConfirmedAt);
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state === "submitting";
   useActionToast(actionData);
-  const embedConfirmed = embedActive ?? !!settings.embedConfirmedAt;
+  const embedConfirmed = embed.active;
   const steps = setupSteps({ embedConfirmed, hasCampaign: campaignCount > 0 });
   const doneCount = steps.filter((s) => s.done).length;
   const left = steps.length - doneCount;
@@ -200,8 +154,8 @@ export default function Setup() {
             <s-button href={editorLink} target="_top" variant="primary">
               Turn on in theme editor
             </s-button>
-            {embedAutoChecked ? (
-              <s-button href="/app/setup">I&apos;ve saved — check again</s-button>
+            {embed.autoChecked ? (
+              <s-button onClick={() => void embed.recheck()} loading={embed.checking}>I&apos;ve saved — check again</s-button>
             ) : (
               <Form method="post">
                 <input type="hidden" name="intent" value="confirm-embed" />
@@ -210,7 +164,7 @@ export default function Setup() {
             )}
           </s-stack>
           <div className="bfs-muted">
-            {embedAutoChecked
+            {embed.autoChecked
               ? "BadgeFlow asks Shopify whether the embed is on each time you open this page."
               : "We couldn't read your theme just now, so confirm it yourself once the embed is on."}
           </div>
@@ -282,7 +236,7 @@ export default function Setup() {
         ? `${featured.name} is live on ${featured.products}.`
         : `${featured.name} is ready for ${featured.products}.`;
     }
-    return "Your badge is showing on a real product card.";
+    return "Open your storefront any time to check how badges look on your theme.";
   }
 
   return (
@@ -357,15 +311,14 @@ export default function Setup() {
           </s-section>
 
           <s-section heading="If something looks off">
-            {HELP.map((h) => (
-              <details key={h.q} className="bfs-help">
-                <summary>
-                  {h.q}
-                  <s-icon type="chevron-right" size="small" />
-                </summary>
-                <p>{h.a}</p>
-              </details>
-            ))}
+            <s-stack direction="block" gap="base">
+              {HELP.map((h) => (
+                <s-stack key={h.q} direction="block" gap="small-100">
+                  <s-text fontWeight="bold">{h.q}</s-text>
+                  <s-text color="subdued" fontSize="small">{h.a}</s-text>
+                </s-stack>
+              ))}
+            </s-stack>
           </s-section>
         </div>
       </div>
@@ -376,5 +329,5 @@ export default function Setup() {
 function doneLabel(key: string): string {
   if (key === "embed") return "Theme block turned on";
   if (key === "campaign") return "First campaign created";
-  return "Checked on your storefront";
+  return "Ready to check on your storefront";
 }
