@@ -72,6 +72,23 @@ export function storefrontStatus(
   return "live";
 }
 
+// On Free, the campaign whose slot a queued campaign is waiting for: the one
+// that ends right when it starts, or — if it can never start — the running
+// campaign with no end date.
+export function blockingCampaign<T extends Schedulable>(
+  campaign: Schedulable,
+  campaigns: T[],
+  windows: Map<string, Window>,
+): T | null {
+  const own = windows.get(campaign.id);
+  const others = campaigns.filter((c) => c.id !== campaign.id && windows.has(c.id));
+  if (own) {
+    if (own.startAt <= campaign.startAt) return null;
+    return others.find((c) => windows.get(c.id)!.endAt?.getTime() === own.startAt.getTime()) ?? null;
+  }
+  return others.find((c) => windows.get(c.id)!.endAt === null) ?? null;
+}
+
 // "All products", "12 products", or the collection's stored count suffix
 // ("Autumn Essentials — 42 products" → "42 products").
 export function productsLabel(c: { targetType: string; targetRef: string; targetValue: string }): string {

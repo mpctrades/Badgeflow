@@ -1,13 +1,15 @@
-import type { LoaderFunctionArgs } from "react-router";
-import { redirect, useLoaderData } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { redirect, useActionData, useLoaderData, useNavigation, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { positionLabel } from "../lib/badges";
-import { PLANS, runningWindows, statusLabel, statusTone, storefrontStatus, type PlanId } from "../lib/campaign";
+import {
+  blockingCampaign, PLANS, runningWindows, statusLabel, statusTone, storefrontStatus, type PlanId,
+} from "../lib/campaign";
 import { fetchPreviewProducts, fetchShopInfo, formatPrice } from "../lib/shopify-catalog.server";
-import { syncStorefrontIfStale } from "../lib/storefront-sync.server";
+import { syncStorefront, syncStorefrontIfStale } from "../lib/storefront-sync.server";
 import { formatInZone } from "../lib/timezone";
-import { campaignToasts, useQueryToast } from "../lib/use-toast";
+import { campaignToasts, useActionToast, useQueryToast } from "../lib/use-toast";
 import { useEmbedStatus } from "../lib/use-embed-status";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -31,6 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const windows = runningWindows(campaigns, plan);
   const status = storefrontStatus(campaign, windows);
   const window = windows.get(campaign.id);
+  const blocker = status === "queued" ? blockingCampaign(campaign, campaigns, windows) : null;
 
   // Only the products this campaign really badges (after plan limits).
   const published = sync.config?.campaigns.find((c) => c.id === campaign.id);
@@ -56,11 +59,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     status,
     schedule: `${formatInZone(runsFrom, tz)} → ${campaign.endAt ? formatInZone(campaign.endAt, tz) : "no end date"}`,
-    queuedNote:
+    queued:
       status === "queued"
-        ? window
-          ? `On the Free plan this campaign waits for the one before it and starts ${formatInZone(window.startAt, tz)}.`
-          : "On the Free plan only one campaign runs at a time, and the one before this has no end date, so this one won't show until it ends or you upgrade."
+        ? {
+            startsAt: window ? formatInZone(window.startAt, tz) : null,
+            blocker: blocker ? { id: blocker.id, name: blocker.badgeLabel, endless: !blocker.endAt } : null,
+          }
         : null,
     notShown: !published && (status === "live" || status === "scheduled"),
     timezone: tz,
@@ -68,6 +72,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     embedConfirmed: !!settings.embedConfirmedAt,
     products: products.map((p) => ({ id: p.id, title: p.title, imageUrl: p.imageUrl, price: formatPrice(p.price, p.currency) })),
   };
+};
+
+// Ends the campaign holding the Free plan's single slot, so the queued one
+// can start. Only ever touches a campaign in this shop.
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  if (formData.get("intent") !== "end-blocker") return null;
+  const id = String(formData.get("blockerId") ?? "");
+  const { count } = await db.campaign.updateMany({ where: { id, shop: session.shop }, data: { endAt: new Date() } });
+  if (count === 0) return { ok: false, isError: true, message: "That campaign no longer exists." };
+  const { ok } = await syncStorefront(admin, session.shop);
+  return ok
+    ? { ok: true, message: "Campaign ended — this one can start now" }
+    : { ok: false, isError: true, message: "Campaign ended, but your storefront couldn't be updated. Try again in a minute." };
 };
 
 function badgeStyle(position: string, size: number, color: string): React.CSSProperties {
@@ -87,10 +106,14 @@ function badgeStyle(position: string, size: number, color: string): React.CSSPro
 }
 
 export default function StorefrontPreview() {
-  const { campaign, status, schedule, queuedNote, notShown, timezone, shopName, embedConfirmed, products } =
+  const { campaign, status, schedule, queued, notShown, timezone, shopName, embedConfirmed, products } =
     useLoaderData<typeof loader>();
   const embedOn = useEmbedStatus(embedConfirmed).active;
   useQueryToast(campaignToasts(embedOn));
+  useActionToast(useActionData<typeof action>());
+  const submit = useSubmit();
+  const ending = useNavigation().state !== "idle";
+  const blocker = queued?.blocker ?? null;
 
   return (
     <s-page heading={campaign.name}>
@@ -103,7 +126,46 @@ export default function StorefrontPreview() {
             The BadgeFlow app embed is off in your theme. <s-link href="/app/setup">Turn it on</s-link>
           </s-banner>
         )}
-        {queuedNote && <s-banner tone="warning">{queuedNote}</s-banner>}
+        {queued && (
+          <s-banner tone="warning" heading={queued.startsAt ? `Waiting its turn — starts ${queued.startsAt}` : "Waiting for a free slot"}>
+            {blocker
+              ? blocker.endless
+                ? <>The Free plan shows one campaign at a time. <s-text fontWeight="bold">{blocker.name}</s-text> is live with no end date, so this campaign can&apos;t start until you end it or upgrade.</>
+                : <>The Free plan shows one campaign at a time. This one starts when <s-text fontWeight="bold">{blocker.name}</s-text> ends.</>
+              : "The Free plan shows one campaign at a time, so this one waits for the campaign before it."}
+            {blocker && (
+              <s-button slot="secondary-actions" command="--show" commandFor="bf-end-blocker">
+                End {blocker.name} now
+              </s-button>
+            )}
+            {blocker && (
+              <s-button slot="secondary-actions" href={`/app/campaigns/${blocker.id}/edit`}>
+                Edit {blocker.endless ? "its end date" : "it"}
+              </s-button>
+            )}
+            <s-button slot="secondary-actions" href="/app/plan">See plans</s-button>
+          </s-banner>
+        )}
+        {blocker && (
+          <s-modal id="bf-end-blocker" heading={`End ${blocker.name} now?`}>
+            <s-paragraph>
+              Its badges disappear from your storefront right away, and <s-text fontWeight="bold">{campaign.name}</s-text>{" "}
+              takes its place if its schedule has started.
+            </s-paragraph>
+            <s-button
+              slot="primary-action"
+              tone="critical"
+              variant="primary"
+              loading={ending}
+              command="--hide"
+              commandFor="bf-end-blocker"
+              onClick={() => submit({ intent: "end-blocker", blockerId: blocker.id }, { method: "post" })}
+            >
+              End campaign
+            </s-button>
+            <s-button slot="secondary-actions" command="--hide" commandFor="bf-end-blocker">Cancel</s-button>
+          </s-modal>
+        )}
         {notShown && (
           <s-banner tone="warning">
             None of this campaign&apos;s products fit in your plan&apos;s product limit right now, so it shows no badges.{" "}

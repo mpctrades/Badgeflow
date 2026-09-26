@@ -239,17 +239,20 @@ export function badgedProductCount(config: StorefrontConfig | null, totalProduct
   return new Set(active.flatMap((c) => c.handles)).size;
 }
 
-export type PublishOutcome = "published" | "scheduled" | "queued" | "not-showing" | "sync-failed";
+export type PublishOutcome = "published" | "scheduled" | "queued" | "blocked" | "over-limit" | "sync-failed";
 
 // What a just-saved campaign will actually do on the storefront.
+// `hasSlot`: whether the Free plan's one-at-a-time queue ever gives it a turn.
 export function publishOutcome(
   result: SyncResult,
   campaign: { id: string; startAt: Date },
+  hasSlot: boolean,
   now = new Date(),
 ): PublishOutcome {
   if (!result.ok || !result.config) return "sync-failed";
   const entry = result.config.campaigns.find((c) => c.id === campaign.id);
-  if (!entry) return "not-showing";
+  // No turn in the queue, or a turn but every product is past the plan limit.
+  if (!entry) return hasSlot ? "over-limit" : "blocked";
   const start = Date.parse(entry.startAt);
   if (start <= now.getTime()) return "published";
   return start > campaign.startAt.getTime() ? "queued" : "scheduled";

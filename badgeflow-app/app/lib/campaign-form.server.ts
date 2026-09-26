@@ -5,7 +5,7 @@
 import { redirect } from "react-router";
 import db from "../db.server";
 import { POSITIONS } from "./badges";
-import { computeStatus } from "./campaign";
+import { computeStatus, PLANS, runningWindows, type PlanId } from "./campaign";
 import { zonedToUtc } from "./timezone";
 import { fetchShopInfo } from "./shopify-catalog.server";
 import { publishOutcome, syncStorefront } from "./storefront-sync.server";
@@ -136,6 +136,12 @@ export async function saveCampaign({
 
   const sync = await syncStorefront(admin, shop);
   if (isDraft) return redirect(`/app/campaigns?toast=${sync.ok ? "draft-saved" : "sync-failed"}`);
-  const outcome = publishOutcome(sync, { id: id!, startAt });
+  const [settings, campaigns] = await Promise.all([
+    db.shopSettings.findUnique({ where: { shop } }),
+    db.campaign.findMany({ where: { shop } }),
+  ]);
+  const plan = (settings && settings.plan in PLANS ? settings.plan : "free") as PlanId;
+  const hasSlot = runningWindows(campaigns, plan).has(id!);
+  const outcome = publishOutcome(sync, { id: id!, startAt }, hasSlot);
   return redirect(`/app/campaigns/storefront?id=${id}&toast=${outcome}`);
 }

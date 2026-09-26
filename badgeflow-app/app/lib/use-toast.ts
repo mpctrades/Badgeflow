@@ -50,8 +50,13 @@ export function campaignToasts(embedConfirmed: boolean): Record<string, ToastMes
       message: "Campaign saved. On the Free plan it waits until your current campaign ends.",
       duration: 8000,
     },
-    "not-showing": {
-      message: "Campaign saved, but it won't show: the Free plan runs one campaign at a time and the current one has no end date, or your plan's product limit is used up.",
+    blocked: {
+      message: "Campaign saved, but it can't start yet: the Free plan runs one campaign at a time and your live one has no end date.",
+      isError: true,
+      duration: 10000,
+    },
+    "over-limit": {
+      message: "Campaign saved, but it shows no badges: your plan's product limit is already used by other campaigns.",
       isError: true,
       duration: 10000,
     },
