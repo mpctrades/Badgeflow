@@ -17,7 +17,7 @@
   font-weight: 800;
   font-size: 1rem;
   letter-spacing: 0.02em;
-  color: #5B4FE0;
+  color: #E25C07;
   padding: 0;
   margin: 0;
 }
@@ -76,7 +76,7 @@
 }
 
 .input:focus {
-  outline: 2px solid #5B4FE0;
+  outline: 2px solid #E25C07;
   outline-offset: 1px;
 }
 
@@ -84,7 +84,7 @@
   padding: 0.6rem 1.1rem;
   border: none;
   border-radius: 8px;
-  background: #5B4FE0;
+  background: #E25C07;
   color: #fff;
   font-weight: 700;
   font-size: 0.95rem;
@@ -92,7 +92,7 @@
 }
 
 .button:hover {
-  background: #4A3FC7;
+  background: #C24E05;
 }
 
 .note {
@@ -100,7 +100,7 @@
   max-width: 30rem;
   padding: 0.75rem 1rem;
   border-radius: 10px;
-  background: #EFEDFB;
+  background: #FCEBDD;
   color: #2B2620;
   font-size: 0.95rem;
 }
