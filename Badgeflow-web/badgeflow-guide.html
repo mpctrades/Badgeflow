@@ -1080,7 +1080,7 @@
       <ol start="8">
         <li><a href="#plans">Plans and the product limit</a></li>
         <li><a href="#ai">Connect your own AI</a></li>
-        <li><a href="#mcp">Drive it from Claude</a></li>
+        <li><a href="#mcp">Claude &amp; ChatGPT (coming later)</a></li>
       </ol>
       <div class="grp">Help</div>
       <ol start="11">
@@ -1374,14 +1374,14 @@
 
       <section id="multi">
         <h2>7. Several badges at once</h2>
-        <p>A product can carry up to three badges. Useful combinations are a discount badge top left, a trust badge
-          bottom right, and a holiday badge in a corner.</p>
+        <p>On Premium and Unlimited a product can carry up to three badges. Useful combinations are a discount badge
+          top left, a trust badge bottom right, and a holiday badge in a corner. To stack badges, open <b>Settings → Display
+            rules</b> and switch off <b>One badge per product</b>.</p>
         <ul>
           <li>Badges anchored to the same corner stack in order rather than overlapping.</li>
-          <li>When two campaigns target the same product, the one with the higher priority is drawn first. Set priority
-            on each campaign.</li>
-          <li>If three badges are already showing, a fourth campaign will not display on that product. The campaigns
-            list flags this so you can see why.</li>
+          <li>When several campaigns target the same product, the newest campaign is drawn first.</li>
+          <li>If three badges are already showing, a fourth campaign does not display on that product.</li>
+          <li>On Free, each product shows one badge: the newest campaign wins.</li>
         </ul>
         <div class="note">Three badges is a hard limit on purpose. Past that, product cards become hard to read and
           conversion falls rather than rises.</div>
@@ -1397,7 +1397,7 @@
             <div class="price">$0</div>
             <ul>
               <li>30 products with badges</li>
-              <li>Full badge library and custom upload</li>
+              <li>Full badge library</li>
               <li>Scheduling included</li>
               <li>One live campaign at a time</li>
               <li>Community support</li>
@@ -1409,8 +1409,8 @@
             <ul>
               <li>150 products with badges</li>
               <li>Unlimited campaigns running together</li>
-              <li>Multi-badge and priority rules</li>
-              <li>Your own AI key and MCP</li>
+              <li>Up to 3 badges on one product</li>
+              <li>AI assistant with your own Claude or OpenAI key</li>
               <li>Email support</li>
             </ul>
           </div>
@@ -1420,7 +1420,6 @@
             <ul>
               <li>Unlimited products</li>
               <li>Everything in Premium</li>
-              <li>Future pro features included</li>
               <li>Priority support</li>
             </ul>
           </div>
@@ -1443,10 +1442,10 @@
 
       <section id="ai">
         <h2>9. Connect your own AI</h2>
-        <p>On paid plans you can connect your own Claude or OpenAI account and describe campaigns in plain language
-          instead of building them by hand. Other apps sell you a small number of AI credits each month. BadgeFlow does
-          the opposite: you bring your own key, you pay your provider directly at their rates, and there is no monthly
-          credit ceiling.</p>
+        <p>On Premium and Unlimited you can connect your own Claude or OpenAI account and describe campaigns in plain
+          language instead of building them by hand. Other apps sell you a small number of AI credits each month.
+          BadgeFlow does the opposite: you bring your own key, you pay your provider directly at their rates, and there
+          is no monthly credit ceiling.</p>
         <ol class="flow">
           <li>
             <h3>Create an API key</h3>
@@ -1455,90 +1454,49 @@
           </li>
           <li>
             <h3>Paste it into BadgeFlow</h3>
-            <p>Open <b>Settings → AI</b>, pick your provider, paste the key, then select <b>Test connection</b>. A green
-              Connected means it works. The key is encrypted, shown masked from then on, and never written to a log.</p>
+            <p>Open <b>Settings</b> and scroll to <b>AI assistant</b>. Pick your provider and model, paste the key, then
+              select <b>Save and test connection</b>. A green <b>Connected</b> banner showing the last four characters
+              of your key means it works. The key is stored encrypted, never shown again, and never written to a log.
+            </p>
           </li>
           <li>
             <h3>Ask for a campaign</h3>
-            <p>Open the AI assistant and describe what you want, for example: <i>"Put a Black Friday badge on my 50 best
-                sellers, -25%, from Nov 27 to Nov 30."</i></p>
-            <p>The assistant reads your catalogue, picks the products and builds a campaign draft.</p>
+            <p>Open <b>AI assistant</b> in the app menu and describe what you want, for example: <i>"Black Friday badge,
+                -25%, on my Winter collection from Nov 27 to Nov 30."</i></p>
+            <p>The assistant picks the products by collection, or by searching your catalogue for a tag, vendor,
+              product type, title or the date products were added, and builds a campaign draft in your store's
+              timezone.</p>
           </li>
           <li>
             <h3>Review, adjust, publish</h3>
-            <p>You see the whole draft: badge, colour, position, the exact product list and the dates. Keep talking to
-              adjust it, for example <i>"make it orange and exclude gift cards"</i>. Nothing reaches your storefront
-              until you select Publish yourself.</p>
+            <p>You see the draft: badge, colour, position, the products it matched and the dates. Keep talking to adjust
+              it, for example <i>"make it orange and end on Sunday"</i>. When it looks right, select <b>Save draft and
+                review</b>: it opens in the campaign builder, and nothing reaches your storefront until you publish it
+              yourself.</p>
           </li>
         </ol>
-        <div class="note"><b>The assistant can never publish on its own.</b> It creates drafts and edits drafts. Going
-          live is always a human action, so a misread instruction costs you a click, not a bad promotion on your live
-          store.</div>
+        <div class="note"><b>The assistant can never publish on its own.</b> It only creates drafts. Going live is
+          always a human action, so a misread instruction costs you a click, not a bad promotion on your live store.
+        </div>
         <h3>Prompts that work well</h3>
         <ul>
           <li>"Badge everything in the Chuseok Gift Sets collection with a gold holiday badge, Sep 20 to Oct 6."</li>
-          <li>"Which products are under 5 units? Put a low stock badge on them until they run out."</li>
-          <li>"Add NEW badges to everything published in the last 14 days, and end them after 30 days."</li>
-          <li>"Copy my last Black Friday campaign to this year's dates and change the discount to 30%."</li>
+          <li>"Add NEW badges to products added in the last 14 days, and end them after 30 days."</li>
+          <li>"Put a FREE SHIP badge on everything from vendor Acme this weekend."</li>
+          <li>"Red SALE -30% badge on products tagged clearance, starting tomorrow at 9am."</li>
         </ul>
+        <p>BadgeFlow can't see stock levels or sales figures, so ask for products by collection, tag, vendor, type or
+          title rather than "best sellers" or "low stock".</p>
+        <p>When you use the assistant, your request, your store's timezone and your collection and product names are
+          sent to the AI provider you chose, under your own account with them.</p>
         <p>If your key stops working, expires or runs out of credit, only the assistant stops. Every campaign keeps
           running and the rest of the app behaves normally.</p>
       </section>
 
       <section id="mcp">
-        <h2>10. Drive it from Claude or ChatGPT</h2>
-        <p>BadgeFlow can also be added as a connector to Claude or ChatGPT, so you manage badges inside the chat you
-          already use. No other badge app on the Shopify App Store does this.</p>
-        <ol class="flow">
-          <li>
-            <h3>Copy your endpoint and token</h3>
-            <p>In <b>Settings → AI</b>, find the MCP section. Copy the endpoint and generate a token. The token belongs
-              to your store alone.</p>
-          </li>
-          <li>
-            <h3>Add it as a connector</h3>
-            <p>In Claude or ChatGPT, open the connector settings, add a custom connector, paste the endpoint and the
-              token.</p>
-          </li>
-          <li>
-            <h3>Talk to your store</h3>
-            <p>Ask things like "what badge campaigns are running on my store?" or "pause the low stock campaign". The
-              reply comes back from your real BadgeFlow data.</p>
-          </li>
-        </ol>
-        <p>What the connector can do:</p>
-        <table>
-          <tr>
-            <th>Tool</th>
-            <th>What it does</th>
-          </tr>
-          <tr>
-            <td><code>list_campaigns</code></td>
-            <td>Shows every campaign and its state</td>
-          </tr>
-          <tr>
-            <td><code>create_campaign</code></td>
-            <td>Builds a new campaign as a draft</td>
-          </tr>
-          <tr>
-            <td><code>update_campaign</code></td>
-            <td>Changes badge, targets or dates</td>
-          </tr>
-          <tr>
-            <td><code>pause_campaign</code></td>
-            <td>Takes a badge off the storefront</td>
-          </tr>
-          <tr>
-            <td><code>list_badge_styles</code></td>
-            <td>Lists the library so you can name a style</td>
-          </tr>
-          <tr>
-            <td><code>preview</code></td>
-            <td>Returns an image of the badge on a product</td>
-          </tr>
-        </table>
-        <p>Revoke the token any time from the same screen. The connector stops working immediately and your campaigns
-          are unaffected.</p>
+        <h2>10. Claude and ChatGPT connector (coming later)</h2>
+        <p>We're working on a connector so you can manage BadgeFlow campaigns from inside Claude or ChatGPT. It isn't
+          available yet; until then, use the AI assistant inside BadgeFlow described above.</p>
       </section>
 
       <section id="fix">
