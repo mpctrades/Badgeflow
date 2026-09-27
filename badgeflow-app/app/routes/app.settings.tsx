@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Link, useActionData, useLoaderData, useNavigation, useSubmit } from "react-router";
+import { Link, useActionData, useFetcher, useLoaderData, useNavigation, useSubmit } from "react-router";
 import { SaveBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
@@ -11,6 +11,10 @@ import { useEmbedStatus } from "../lib/use-embed-status";
 import { useActionToast } from "../lib/use-toast";
 import type { CallbackEvent } from "@shopify/polaris-types";
 import { syncStorefront } from "../lib/storefront-sync.server";
+import { decryptSecret, encryptSecret } from "../lib/ai/crypto.server";
+import { AiError, testConnection } from "../lib/ai/providers.server";
+import { defaultModel, isProvider, PROVIDERS, type AiProvider } from "../lib/ai/providers";
+import { planHasAi } from "../lib/ai/assistant.server";
 
 const SAVE_BAR_ID = "bf-settings-save-bar";
 const MIN_SIZE = 8;
@@ -33,13 +37,74 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     settings,
     // Stacking several badges on one product is a Premium feature.
     canStack: settings.plan !== "free",
+    ai: {
+      available: planHasAi(settings.plan),
+      provider: (isProvider(settings.aiProvider) ? settings.aiProvider : "anthropic") as AiProvider,
+      model: settings.aiModel,
+      keyHint: settings.aiKeyHint,
+      verifiedAt: settings.aiVerifiedAt ? settings.aiVerifiedAt.toISOString().slice(0, 10) : null,
+    },
     previewProduct: product ? { title: product.title, imageUrl: product.imageUrl, price } : null,
   };
 };
 
+// Connect, re-test or remove the merchant's own AI key. The key is tested
+// before it's stored, stored encrypted, and never sent back to the browser.
+async function aiAction(shop: string, formData: FormData) {
+  const intent = String(formData.get("intent"));
+  const current = await db.shopSettings.upsert({ where: { shop }, update: {}, create: { shop } });
+  if (!planHasAi(current.plan)) return { ok: false, isError: true, message: "The AI assistant is part of Premium and Unlimited." };
+
+  if (intent === "ai-remove") {
+    await db.shopSettings.update({
+      where: { shop },
+      data: { aiProvider: null, aiModel: null, aiKeyCipher: null, aiKeyHint: null, aiVerifiedAt: null },
+    });
+    return { ok: true, message: "AI key removed" };
+  }
+
+  const provider = formData.get("aiProvider");
+  if (!isProvider(provider)) return { ok: false, isError: true, message: "Choose an AI provider." };
+  const model = String(formData.get("aiModel") ?? "");
+  if (!PROVIDERS[provider].models.some((m) => m.id === model)) return { ok: false, isError: true, message: "Choose a model." };
+
+  let apiKey = String(formData.get("aiKey") ?? "").trim();
+  if (intent === "ai-test") {
+    if (!current.aiKeyCipher) return { ok: false, isError: true, message: "Paste your API key first." };
+    if (current.aiProvider !== provider) {
+      return { ok: false, isError: true, message: `Paste a ${PROVIDERS[provider].label} key to switch provider.` };
+    }
+    try {
+      apiKey = decryptSecret(current.aiKeyCipher);
+    } catch {
+      return { ok: false, isError: true, message: "Your saved key can't be read any more. Paste it again." };
+    }
+  } else if (apiKey.length < 20 || /\s/.test(apiKey)) {
+    return { ok: false, isError: true, message: "That doesn't look like an API key. Copy it again from your provider." };
+  }
+
+  try {
+    await testConnection(provider, apiKey, model);
+  } catch (error) {
+    if (error instanceof AiError) return { ok: false, isError: true, message: error.message };
+    throw error;
+  }
+  await db.shopSettings.update({
+    where: { shop },
+    data: {
+      aiProvider: provider,
+      aiModel: model,
+      aiVerifiedAt: new Date(),
+      ...(intent === "ai-connect" ? { aiKeyCipher: encryptSecret(apiKey), aiKeyHint: apiKey.slice(-4) } : {}),
+    },
+  });
+  return { ok: true, message: `Connected to ${PROVIDERS[provider].label}` };
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
+  if (String(formData.get("intent") ?? "").startsWith("ai-")) return aiAction(session.shop, formData);
   const current = await db.shopSettings.findUnique({ where: { shop: session.shop } });
   const canStack = (current?.plan ?? "free") !== "free";
 
@@ -144,7 +209,7 @@ type FormState = {
 };
 
 export default function Settings() {
-  const { settings, canStack, previewProduct } = useLoaderData<typeof loader>();
+  const { settings, canStack, previewProduct, ai } = useLoaderData<typeof loader>();
   const embedOn = useEmbedStatus(!!settings.embedConfirmedAt).active;
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
@@ -318,6 +383,8 @@ export default function Settings() {
               </div>
             </div>
           </s-section>
+
+          <AiSettings ai={ai} />
         </div>
 
         <div className="bfst-col">
@@ -351,5 +418,107 @@ export default function Settings() {
         </div>
       </div>
     </s-page>
+  );
+}
+
+type AiState = {
+  available: boolean;
+  provider: AiProvider;
+  model: string | null;
+  keyHint: string | null;
+  verifiedAt: string | null;
+};
+
+function AiSettings({ ai }: { ai: AiState }) {
+  const fetcher = useFetcher<typeof action>();
+  useActionToast(fetcher.data);
+  const [provider, setProvider] = useState<AiProvider>(ai.provider);
+  const [model, setModel] = useState(ai.model && PROVIDERS[ai.provider].models.some((m) => m.id === ai.model) ? ai.model : defaultModel(ai.provider));
+  const [apiKey, setApiKey] = useState("");
+  const busy = fetcher.state !== "idle";
+  const pending = fetcher.formData?.get("intent");
+
+  // Clear the pasted key once it's been saved.
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) setApiKey("");
+  }, [fetcher.state, fetcher.data]);
+
+  if (!ai.available) {
+    return (
+      <s-section heading="AI assistant">
+        <div id="ai" />
+        <s-paragraph>
+          Connect your own Claude or OpenAI key and describe campaigns in plain words. Included with Premium and Unlimited.
+        </s-paragraph>
+        <s-button href="/app/plan">See plans</s-button>
+      </s-section>
+    );
+  }
+
+  const connected = !!ai.keyHint;
+  const submit = (intent: string) =>
+    fetcher.submit({ intent, aiProvider: provider, aiModel: model, aiKey: apiKey }, { method: "post" });
+
+  return (
+    <s-section heading="AI assistant">
+      <div id="ai" />
+      <s-stack direction="block" gap="base">
+        <s-paragraph color="subdued">
+          Bring your own key: you pay your AI provider directly at their rates, and BadgeFlow adds no AI charges. The key
+          is stored encrypted and never shown again. When you use the assistant, your request, your store&apos;s timezone
+          and your collection and product names are sent to the provider you choose.
+        </s-paragraph>
+        {connected && (
+          <s-banner tone="success">
+            Connected to {PROVIDERS[ai.provider].label} · key ending {ai.keyHint}
+            {ai.verifiedAt ? ` · last checked ${ai.verifiedAt}` : ""}. <Link to="/app/ai">Open the AI assistant</Link>
+          </s-banner>
+        )}
+        <s-select
+          label="Provider"
+          value={provider}
+          onChange={(e: CallbackEvent<"s-select">) => {
+            const next = e.currentTarget.value as AiProvider;
+            setProvider(next);
+            setModel(defaultModel(next));
+          }}
+        >
+          {(Object.keys(PROVIDERS) as AiProvider[]).map((p) => (
+            <s-option key={p} value={p}>{PROVIDERS[p].label}</s-option>
+          ))}
+        </s-select>
+        <s-select label="Model" value={model} onChange={(e: CallbackEvent<"s-select">) => setModel(e.currentTarget.value)}>
+          {PROVIDERS[provider].models.map((m) => (
+            <s-option key={m.id} value={m.id}>{m.label}</s-option>
+          ))}
+        </s-select>
+        <s-password-field
+          label={connected ? "Replace API key" : "API key"}
+          value={apiKey}
+          autocomplete="off"
+          details={PROVIDERS[provider].keyHelp}
+          onInput={(e: CallbackEvent<"s-password-field">) => setApiKey(e.currentTarget.value)}
+          onChange={(e: CallbackEvent<"s-password-field">) => setApiKey(e.currentTarget.value)}
+        />
+        <s-stack direction="inline" gap="small-200">
+          <s-button variant="primary" onClick={() => submit("ai-connect")} disabled={busy || !apiKey.trim()} loading={busy && pending === "ai-connect"}>
+            Save and test connection
+          </s-button>
+          {connected && (
+            <s-button onClick={() => submit("ai-test")} disabled={busy} loading={busy && pending === "ai-test"}>
+              Test again
+            </s-button>
+          )}
+          {connected && (
+            <s-button tone="critical" variant="tertiary" onClick={() => submit("ai-remove")} disabled={busy} loading={busy && pending === "ai-remove"}>
+              Remove key
+            </s-button>
+          )}
+        </s-stack>
+        <s-text color="subdued" fontSize="small">
+          If the key stops working or runs out of credit, only the assistant stops — every campaign keeps running.
+        </s-text>
+      </s-stack>
+    </s-section>
   );
 }

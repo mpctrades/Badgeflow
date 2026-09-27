@@ -51,20 +51,23 @@ const ORDER: PlanId[] = ["free", "premium", "unlimited"];
 // Feature rows per plan: `true` = included (check), `false` = not included (dash).
 const FEATURES: Record<PlanId, { label: string; included: boolean }[]> = {
   free: [
-    { label: `Badges on ${PLANS.free.limit} products`, included: true },
-    { label: `${PLANS.free.liveCampaignLimit} campaign live at a time`, included: true },
-    { label: "Full badge library and scheduling", included: true },
-    { label: "Up to 3 badges stacked on one product", included: false },
+    { label: `${PLANS.free.limit} products with badges`, included: true },
+    { label: "Full badge library", included: true },
+    { label: "Scheduling included", included: true },
+    { label: "One live campaign at a time", included: true },
+    { label: "Community support", included: true },
   ],
   premium: [
-    { label: `Badges on ${PLANS.premium.limit} products`, included: true },
-    { label: "Unlimited live campaigns", included: true },
-    { label: "Up to 3 badges stacked on one product", included: true },
+    { label: `${PLANS.premium.limit} products with badges`, included: true },
+    { label: "Unlimited campaigns running together", included: true },
+    { label: "Up to 3 badges on one product", included: true },
+    { label: "AI assistant with your own Claude or OpenAI key", included: true },
+    { label: "Email support", included: true },
   ],
   unlimited: [
+    { label: "Unlimited products", included: true },
     { label: "Everything in Premium", included: true },
-    { label: "Unlimited products with badges", included: true },
-    { label: "Unlimited live campaigns", included: true },
+    { label: "Priority support", included: true },
   ],
 };
 

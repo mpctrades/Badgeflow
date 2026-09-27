@@ -226,6 +226,9 @@ export default function Campaigns() {
       <s-button slot="primary-action" variant="primary" icon="plus" href="/app/campaigns/new">
         Create campaign
       </s-button>
+      <s-button slot="secondary-actions" icon="magic" href="/app/ai">
+        Draft with AI
+      </s-button>
       <div className="bfc-sub" style={{ fontSize: 13, marginBottom: 12 }}>
         {subheading}
         {freePlan && totals.all > 1 ? " · Free shows one campaign at a time; others queue" : ""}

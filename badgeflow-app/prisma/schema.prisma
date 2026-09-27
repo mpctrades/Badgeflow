@@ -48,6 +48,14 @@ model ShopSettings {
   hideSoldOut        Boolean @default(true)
   oneBadgePerProduct Boolean @default(true)
   shrinkOnMobile     Boolean @default(false)
+  // Bring-your-own-key AI assistant (Premium and Unlimited). The key is
+  // stored AES-256-GCM encrypted; only its last 4 characters are kept in
+  // the clear to show which key is connected.
+  aiProvider         String?
+  aiModel            String?
+  aiKeyCipher        String?
+  aiKeyHint          String?
+  aiVerifiedAt       DateTime?
 }
 
 model Campaign {

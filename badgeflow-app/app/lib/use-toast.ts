@@ -42,6 +42,7 @@ export function campaignToasts(embedConfirmed: boolean): Record<string, ToastMes
   const embedNote = embedConfirmed ? "" : " Turn on the app embed in Store setup so shoppers can see it.";
   return {
     "draft-saved": "Draft saved",
+    "ai-draft": { message: "Draft saved from the AI assistant — review it, then publish when you're ready.", duration: 8000 },
     published: embedConfirmed
       ? "Campaign published — badges are live"
       : { message: `Campaign published.${embedNote}`, duration: 8000 },

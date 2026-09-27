@@ -43,11 +43,14 @@ export async function saveCampaign({
   shop,
   formData,
   editingId,
+  openDraftInEditor = false,
 }: {
   admin: AdminGraphqlClient;
   shop: string;
   formData: FormData;
   editingId: string | null;
+  // The AI assistant saves drafts straight into the builder for review.
+  openDraftInEditor?: boolean;
 }) {
   const intent = str(formData, "intent") === "publish" ? "publish" : "draft";
   const errors: CampaignErrors = {};
@@ -135,6 +138,7 @@ export async function saveCampaign({
   }
 
   const sync = await syncStorefront(admin, shop);
+  if (isDraft && openDraftInEditor) return redirect(`/app/campaigns/${id}/edit?toast=ai-draft`);
   if (isDraft) return redirect(`/app/campaigns?toast=${sync.ok ? "draft-saved" : "sync-failed"}`);
   const [settings, campaigns] = await Promise.all([
     db.shopSettings.findUnique({ where: { shop } }),

@@ -24,6 +24,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/campaigns">Campaigns</s-link>
+        <s-link href="/app/ai">AI assistant</s-link>
         <s-link href="/app/plan">Plan &amp; billing</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/setup">Store setup</s-link>

@@ -7,6 +7,7 @@ import { PLANS, type PlanId } from "../lib/campaign";
 import { formatInZone, TIME_OPTIONS, zonedToUtc } from "../lib/timezone";
 import type { PreviewProduct } from "../lib/shopify-catalog.server";
 import { useEmbedStatus } from "../lib/use-embed-status";
+import { campaignToasts, useQueryToast } from "../lib/use-toast";
 
 export type WizardInitial = {
   editingId?: string;
@@ -147,6 +148,7 @@ export function CampaignWizard({
   const navigation = useNavigation();
   const shopify = useAppBridge();
   const embedOn = useEmbedStatus(embedConfirmed).active;
+  useQueryToast(campaignToasts(embedOn));
   const [step, setStep] = useState<WizardStep>("design");
   const [pendingIntent, setPendingIntent] = useState<"draft" | "publish" | null>(null);
   const busy = navigation.state !== "idle" && navigation.formMethod?.toLowerCase() === "post";
