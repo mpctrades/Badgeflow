@@ -41,4 +41,4 @@ api_version = "2026-07"
 redirect_urls = [ "https://dev.badgeflow.mpctrades.com/auth/callback" ]
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
