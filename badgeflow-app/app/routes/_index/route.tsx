@@ -1,6 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { redirect, Form, useLoaderData } from "react-router";
-
+import { redirect } from "react-router";
 
 import styles from "./styles.module.css";
 
@@ -11,9 +10,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  // App Store requirement 2.3.1: installs start from Shopify, so never ask
-  // merchants to type their myshopify.com domain here.
-  return { showForm: false };
+  // App Store requirement 2.3.1: installs start from Shopify, so this page
+  // never asks merchants to type their store domain.
+  return null;
 };
 
 const FEATURES = [
@@ -23,8 +22,6 @@ const FEATURES = [
 ];
 
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
-
   return (
     <div className={styles.index}>
       <div className={styles.content}>
@@ -33,17 +30,6 @@ export default function App() {
         <p className={styles.text}>
           Sale, new-arrival, and low-stock badges on your product images — scheduled, previewed, and reviewed before they ever reach shoppers.
         </p>
-        {showForm && (
-          <Form className={styles.form} method="post" action="/auth/login">
-            <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" placeholder="my-shop-domain.myshopify.com" />
-            </label>
-            <button className={styles.button} type="submit">
-              Log in
-            </button>
-          </Form>
-        )}
         <p className={styles.note}>
           BadgeFlow runs inside your Shopify admin. Install it from the Shopify App Store, then open it from{" "}
           <strong>Apps → BadgeFlow</strong>.

@@ -110,9 +110,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const size = Number(formData.get("defaultSize") ?? 12);
   const position = String(formData.get("defaultPosition") ?? "top-left");
+  const color = String(formData.get("defaultColor") ?? "");
   const data = {
     appEnabled: formData.get("appEnabled") === "on",
-    defaultColor: String(formData.get("defaultColor") ?? "#E33C2B"),
+    defaultColor: /^#[0-9a-f]{6}$/i.test(color) ? color : "#E33C2B",
     defaultPosition: (POSITIONS as readonly string[]).includes(position) ? position : "top-left",
     defaultSize: Number.isFinite(size) ? Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.round(size))) : 12,
     hideSoldOut: formData.get("hideSoldOut") === "on",
