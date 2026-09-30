@@ -55,11 +55,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // On Free, a campaign that is live by its dates may be waiting its turn.
   const windows = runningWindows(allCampaigns, plan, now);
 
-  const all = allCampaigns.map((c) => ({
-    ...c,
-    computedStatus: displayStatus(c, now),
-    shownStatus: storefrontStatus(c, windows, now),
-  }));
+  const all = allCampaigns.map((c) => {
+    const shownStatus = storefrontStatus(c, windows, now);
+    return {
+      ...c,
+      computedStatus: displayStatus(c, now),
+      shownStatus,
+      // Tabs follow what shoppers see: a campaign waiting its turn on Free
+      // sits under Scheduled, not Live.
+      tab: (shownStatus === "queued" ? "scheduled" : shownStatus) as CampaignStatus,
+    };
+  });
   const totals = { all: all.length, live: all.filter((c) => c.shownStatus === "live").length };
 
   const needle = q.trim().toLowerCase();
@@ -69,13 +75,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const counts: Record<CampaignStatus | "all", number> = {
     all: matching.length,
-    draft: matching.filter((c) => c.computedStatus === "draft").length,
-    live: matching.filter((c) => c.computedStatus === "live").length,
-    scheduled: matching.filter((c) => c.computedStatus === "scheduled").length,
-    ended: matching.filter((c) => c.computedStatus === "ended").length,
+    draft: matching.filter((c) => c.tab === "draft").length,
+    live: matching.filter((c) => c.tab === "live").length,
+    scheduled: matching.filter((c) => c.tab === "scheduled").length,
+    ended: matching.filter((c) => c.tab === "ended").length,
   };
 
-  const filtered = (statusFilter === "all" ? matching : matching.filter((c) => c.computedStatus === statusFilter))
+  const filtered = (statusFilter === "all" ? matching : matching.filter((c) => c.tab === statusFilter))
     .slice()
     .sort((a, b) => {
       if (sort === "oldest") return a.createdAt.getTime() - b.createdAt.getTime();

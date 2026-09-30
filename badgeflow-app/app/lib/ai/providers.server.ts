@@ -124,7 +124,9 @@ export async function askAssistant(opts: {
   const { provider, apiKey, model, system, messages } = opts;
 
   if (provider === "anthropic") {
-    const isOpus5 = model === "claude-opus-5";
+    // Models with server-side refusal fallbacks (keys saved before the
+    // model list changed may still name claude-opus-5).
+    const hasFallback = ["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5-5"].includes(model);
     try {
       const response = await anthropicClient(apiKey).beta.messages.parse({
         model,
@@ -136,8 +138,8 @@ export async function askAssistant(opts: {
           ...(model.startsWith("claude-haiku") ? {} : { effort: "medium" as const }),
           format: betaZodOutputFormat(AssistantTurn),
         },
-        // On Claude Opus 5, a safety decline is retried on a fallback model.
-        ...(isOpus5 ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+        // A safety decline is retried on a fallback model.
+        ...(hasFallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
       });
       if (response.stop_reason === "refusal") throw new AiError("The AI declined this request. Try rephrasing it.", "refusal");
       if (response.stop_reason === "max_tokens" || !response.parsed_output) {

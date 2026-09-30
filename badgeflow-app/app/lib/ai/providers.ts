@@ -6,8 +6,8 @@ export const PROVIDERS: Record<AiProvider, { label: string; models: { id: string
   anthropic: {
     label: "Claude (Anthropic)",
     models: [
-      { id: "claude-opus-5", label: "Claude Opus 5 (best results)" },
-      { id: "claude-sonnet-5", label: "Claude Sonnet 5 (cheaper)" },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5 (best results)" },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5 (cheaper)" },
       { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 (cheapest)" },
     ],
     keyHelp: "Create a key at console.anthropic.com → API keys.",

@@ -208,6 +208,8 @@ export async function syncStorefront(admin: AdminGraphqlClient, shop: string): P
     lastSync.set(shop, { config, at: Date.now() });
     return { ok: true, config };
   } catch (error) {
+    // Auth redirects are Responses and must reach the framework.
+    if (error instanceof Response) throw error;
     console.error(`[BadgeFlow] storefront sync failed for ${shop}:`, error);
     return { ok: false, config: null };
   }
