@@ -230,11 +230,14 @@ export default function Settings() {
   const [form, setForm] = useState<FormState>(saved);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }));
 
-  // After a save, the loader revalidates — re-sync so the bar closes.
+  // After a save, the loader revalidates — re-sync so the bar closes. Keyed
+  // on the saved values, not the object: other revalidations (the AI key
+  // form, the embed check) return a fresh object and must not wipe edits.
+  const savedKey = JSON.stringify(saved);
   useEffect(() => {
     setForm(saved);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings]);
+  }, [savedKey]);
 
   const dirty = (Object.keys(saved) as (keyof FormState)[]).some((k) => form[k] !== saved[k]);
 

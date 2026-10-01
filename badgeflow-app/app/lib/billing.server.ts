@@ -16,16 +16,25 @@ import { syncStorefront } from "./storefront-sync.server";
 type AdminGraphqlClient = { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
 
 const PARTNER_API_VERSION = "2026-07";
-// Only confirmed results are cached, so a merchant who just approved a plan is
-// checked again right away via `force`, and cancellations show up within minutes.
+// Confirmed results are cached for a few minutes; a merchant who just approved
+// a plan is checked again right away via `force`, and cancellations show up
+// within minutes.
 const CACHE_MS = 5 * 60 * 1000;
 // While the Partner API can't be reached, the last confirmed paid plan is
 // honoured for this long, then the shop falls back to Free until Shopify
 // confirms the plan again. Protects paying merchants from short outages
 // without leaving cancelled ones on paid features indefinitely.
 const STALE_PLAN_MS = 7 * 24 * 60 * 60 * 1000;
+// This check runs in the app layout, so a slow Partner API must never hold up
+// a page: give up after a few seconds and use the stored plan.
+const PARTNER_TIMEOUT_MS = 8000;
+// After a failed check, wait this long before asking again, so an outage
+// doesn't add a timeout to every page the merchant opens.
+const FAILURE_CACHE_MS = 60 * 1000;
 let warnedUnconfigured = false;
-const cache = new Map<string, { status: PlanStatus; at: number }>();
+const cache = new Map<string, { status: PlanStatus; at: number; ttl: number }>();
+// The layout and the Plan page load in parallel; share one check between them.
+const inFlight = new Map<string, Promise<PlanStatus>>();
 
 export type PlanStatus = {
   plan: PlanId;
@@ -94,6 +103,7 @@ async function fetchActiveSubscription(shopId: string): Promise<ActiveSubscripti
         }`,
         variables: { appId: process.env.SHOPIFY_APP_GID, shopId },
       }),
+      signal: AbortSignal.timeout(PARTNER_TIMEOUT_MS),
     },
   );
   const body = await res.json().catch(() => ({}));
@@ -115,8 +125,16 @@ export async function refreshPlan(
   opts: { force?: boolean } = {},
 ): Promise<PlanStatus> {
   const cached = cache.get(shop);
-  if (!opts.force && cached && Date.now() - cached.at < CACHE_MS) return cached.status;
+  if (!opts.force && cached && Date.now() - cached.at < cached.ttl) return cached.status;
+  const pending = inFlight.get(shop);
+  if (pending) return pending;
 
+  const check = checkPlan(admin, shop).finally(() => inFlight.delete(shop));
+  inFlight.set(shop, check);
+  return check;
+}
+
+async function checkPlan(admin: AdminGraphqlClient, shop: string): Promise<PlanStatus> {
   const settings = await db.shopSettings.upsert({ where: { shop }, update: {}, create: { shop } });
   const stored: PlanStatus = {
     plan: (settings.plan as PlanId) ?? "free",
@@ -158,7 +176,7 @@ export async function refreshPlan(
       // Plan limits are applied in the storefront copy, so republish it.
       await syncStorefront(admin, shop);
     }
-    cache.set(shop, { status, at: Date.now() });
+    cache.set(shop, { status, at: Date.now(), ttl: CACHE_MS });
     return status;
   } catch (error) {
     if (error instanceof Response) throw error;
@@ -169,13 +187,17 @@ export async function refreshPlan(
     if (stored.plan !== "free" && checkedAt && Date.now() - checkedAt > STALE_PLAN_MS) {
       await db.shopSettings.update({ where: { shop }, data: { plan: "free" } });
       await syncStorefront(admin, shop);
-      return {
+      const downgraded: PlanStatus = {
         ...stored,
         plan: "free",
         error: "We couldn't confirm your plan with Shopify for over a week, so Free limits apply until it's confirmed again.",
       };
+      cache.set(shop, { status: downgraded, at: Date.now(), ttl: FAILURE_CACHE_MS });
+      return downgraded;
     }
-    return { ...stored, error: "Couldn't reach Shopify billing just now — showing your last known plan." };
+    const fallback: PlanStatus = { ...stored, error: "Couldn't reach Shopify billing just now — showing your last known plan." };
+    cache.set(shop, { status: fallback, at: Date.now(), ttl: FAILURE_CACHE_MS });
+    return fallback;
   }
 }
 
@@ -188,4 +210,5 @@ export function pricingAdminLink(): string {
 
 export function forgetPlan(shop: string) {
   cache.delete(shop);
+  inFlight.delete(shop);
 }

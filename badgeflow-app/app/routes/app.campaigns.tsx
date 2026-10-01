@@ -297,6 +297,8 @@ export default function Campaigns() {
                     slot="primary-action"
                     tone="critical"
                     variant="primary"
+                    command="--hide"
+                    commandFor="bfc-bulk-delete"
                     onClick={() => {
                       submit({ intent: "delete-many", ids: visibleSelected.join(",") }, { method: "post" });
                       setSelected(new Set());
@@ -422,6 +424,8 @@ function DeleteModal({ id, name }: { id: string; name: string }) {
         slot="primary-action"
         tone="critical"
         variant="primary"
+        command="--hide"
+        commandFor={modalId}
         onClick={() => submit({ intent: "delete", id }, { method: "post" })}
       >
         Delete
@@ -444,6 +448,8 @@ function EndModal({ campaign }: { campaign: { id: string; badgeLabel: string } }
         slot="primary-action"
         tone="critical"
         variant="primary"
+        command="--hide"
+        commandFor={modalId}
         onClick={() => submit({ intent: "end-now", id: campaign.id }, { method: "post" })}
       >
         End campaign
