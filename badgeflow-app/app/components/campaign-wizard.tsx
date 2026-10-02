@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate, useNavigation, useSubmit } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { CallbackEvent } from "@shopify/polaris-types";
-import { BADGE_PRESETS, POSITIONS, claimWarning, positionLabel } from "../lib/badges";
+import { BADGE_PRESETS, POSITIONS, badgeTextColor, claimWarning, positionLabel } from "../lib/badges";
 import { PLANS, type PlanId } from "../lib/campaign";
 import { formatInZone, TIME_OPTIONS, zonedToUtc } from "../lib/timezone";
 import type { PreviewProduct } from "../lib/shopify-catalog.server";
@@ -68,7 +68,7 @@ function overlayStyle(pos: string, sz: number, color: string, scale = 1): React.
     ...(pos.endsWith("left") ? { left: "6%" } : {}),
     ...(pos.endsWith("right") ? { right: "6%" } : {}),
     ...(pos.endsWith("center") ? { left: "50%", transform: pos.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" } : {}),
-    background: color, color: "#fff", fontWeight: 700, letterSpacing: ".02em",
+    background: color, color: badgeTextColor(color), fontWeight: 700, letterSpacing: ".02em",
     padding: "4px 8px", borderRadius: 4, fontSize: (6 + sz / 2) * scale, whiteSpace: "nowrap",
   };
 }
@@ -657,9 +657,10 @@ export function CampaignWizard({
           slot="primary-action"
           tone="critical"
           variant="primary"
-          command="--hide"
-          commandFor="bfw-discard"
-          onClick={() => navigate("/app/campaigns")}
+          onClick={() => {
+            shopify.modal.hide("bfw-discard");
+            navigate("/app/campaigns");
+          }}
         >
           Discard
         </s-button>

@@ -147,12 +147,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return done(`${count} campaign${count === 1 ? "" : "s"} deleted`);
   }
   if (intent === "end-now") {
-    await db.campaign.updateMany({ where: { id, shop: session.shop }, data: { endAt: new Date() } });
+    const now = new Date();
+    await db.campaign.updateMany({
+      where: { id, shop: session.shop, isDraft: false, startAt: { lte: now }, OR: [{ endAt: null }, { endAt: { gt: now } }] },
+      data: { endAt: now },
+    });
     const result = await done("Campaign ended");
     return result.ok ? { ...result, message: "Campaign ended — badges removed from your storefront" } : result;
   }
   if (intent === "cancel-schedule") {
-    await db.campaign.updateMany({ where: { id, shop: session.shop }, data: { isDraft: true } });
+    // Only a campaign that hasn't started yet can go back to draft.
+    await db.campaign.updateMany({ where: { id, shop: session.shop, isDraft: false, startAt: { gt: new Date() } }, data: { isDraft: true } });
     return done("Campaign moved back to draft");
   }
 
@@ -297,11 +302,10 @@ export default function Campaigns() {
                     slot="primary-action"
                     tone="critical"
                     variant="primary"
-                    command="--hide"
-                    commandFor="bfc-bulk-delete"
                     onClick={() => {
                       submit({ intent: "delete-many", ids: visibleSelected.join(",") }, { method: "post" });
                       setSelected(new Set());
+                      shopify.modal.hide("bfc-bulk-delete");
                     }}
                   >
                     Delete
@@ -412,6 +416,10 @@ export default function Campaigns() {
   );
 }
 
+// Confirm buttons in an s-modal must not carry command="--hide": the admin
+// renders the modal, runs the command itself and never delivers the click to
+// the app, so onClick (the actual submit) silently doesn't run. Submit first,
+// then close with shopify.modal.hide().
 function DeleteModal({ id, name }: { id: string; name: string }) {
   const modalId = `delete-modal-${id}`;
   const submit = useSubmit();
@@ -424,9 +432,10 @@ function DeleteModal({ id, name }: { id: string; name: string }) {
         slot="primary-action"
         tone="critical"
         variant="primary"
-        command="--hide"
-        commandFor={modalId}
-        onClick={() => submit({ intent: "delete", id }, { method: "post" })}
+        onClick={() => {
+          submit({ intent: "delete", id }, { method: "post" });
+          shopify.modal.hide(modalId);
+        }}
       >
         Delete
       </s-button>
@@ -448,9 +457,10 @@ function EndModal({ campaign }: { campaign: { id: string; badgeLabel: string } }
         slot="primary-action"
         tone="critical"
         variant="primary"
-        command="--hide"
-        commandFor={modalId}
-        onClick={() => submit({ intent: "end-now", id: campaign.id }, { method: "post" })}
+        onClick={() => {
+          submit({ intent: "end-now", id: campaign.id }, { method: "post" });
+          shopify.modal.hide(modalId);
+        }}
       >
         End campaign
       </s-button>

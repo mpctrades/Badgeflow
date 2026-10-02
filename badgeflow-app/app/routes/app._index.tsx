@@ -1,5 +1,6 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData } from "react-router";
+import { badgeTextColor } from "../lib/badges";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
@@ -73,11 +74,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // looks broken.
   const previewCampaign = firstLive ?? scheduled[0] ?? null;
   const published = previewCampaign ? sync.config?.campaigns.find((c) => c.id === previewCampaign.id) : undefined;
-  const previewProducts = await fetchPreviewProducts(admin, 3, published && !published.all ? published.handles : undefined);
+  // A campaign missing from the storefront copy (failed sync, no products
+  // left, over the plan limit) has no real products to show; never fall back
+  // to unrelated store products as if they carried its badge.
+  const previewHandles = previewCampaign ? (published ? (published.all ? undefined : published.handles) : []) : undefined;
+  const previewProducts = await fetchPreviewProducts(admin, 3, previewHandles);
+  const previewMissing = !!previewCampaign && !published;
 
   const events = [...live, ...scheduled]
     .flatMap((c) => [
-      ...(c.startAt > now ? [{ at: c.startAt, label: `${c.badgeLabel} starts` }] : []),
+      // Queued campaigns (Free runs one at a time) start when their slot frees up.
+      ...((windows.get(c.id)?.startAt ?? c.startAt) > now
+        ? [{ at: windows.get(c.id)?.startAt ?? c.startAt, label: `${c.badgeLabel} starts` }]
+        : []),
       ...(c.endAt && c.endAt > now ? [{ at: c.endAt, label: `${c.badgeLabel} ends` }] : []),
     ])
     .sort((a, b) => a.at.getTime() - b.at.getTime())
@@ -96,6 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const duplicateHref = last ? `/app/campaigns/${last.id}/edit?duplicate=1` : null;
 
   return {
+    appEnabled: settings.appEnabled,
     shopName: shopInfo.name,
     storefrontUrl: `https://${session.shop}`,
     syncFailed: !sync.ok,
@@ -115,7 +125,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       badge: previewCampaign
         ? { text: previewCampaign.badgeText, color: previewCampaign.badgeColor, position: previewCampaign.position, size: previewCampaign.size }
         : { text: "SALE -20%", color: "#E33C2B", position: "top-left", size: 12 },
-      caption: firstLive
+      caption: previewMissing
+        ? `${previewCampaign!.badgeLabel} isn't reaching your storefront yet.`
+        : firstLive
         ? "Products in the live campaign, as shoppers see them."
         : previewCampaign
           ? "How your next scheduled campaign will look."
@@ -127,6 +139,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         price: formatPrice(p.price, p.currency),
         badged: true,
       })),
+      emptyText: previewMissing
+        ? "None of its products can carry the badge right now — open the campaign to check its products, or your plan's product limit."
+        : "Add a product to your store to see a live preview here.",
     },
     events,
     totalCampaigns: campaigns.length,
@@ -185,14 +200,14 @@ function badgeOverlayStyle(badge: { color: string; position: string; size: numbe
     ...(position.endsWith("center")
       ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
       : {}),
-    background: badge.color, color: "#fff", fontWeight: 700,
+    background: badge.color, color: badgeTextColor(badge.color), fontWeight: 700,
     padding: "3px 7px", borderRadius: 4, fontSize: 7 + badge.size / 3, whiteSpace: "nowrap",
   };
 }
 
 export default function Index() {
   const {
-    shopName, storefrontUrl, syncFailed, hasCampaign, embedConfirmed: embedStored, stats, preview, events, totalCampaigns, recent,
+    appEnabled, shopName, storefrontUrl, syncFailed, hasCampaign, embedConfirmed: embedStored, stats, preview, events, totalCampaigns, recent,
     duplicateHref,
   } = useLoaderData<typeof loader>();
   const embedConfirmed = useEmbedStatus(embedStored).active;
@@ -203,7 +218,9 @@ export default function Index() {
   const usagePct = stats.limit ? Math.min(100, (stats.badgedCount / stats.limit) * 100) : 100;
   const slotsLeft = stats.limit ? stats.limit - stats.badgedCount : null;
 
-  const subheading = stats.live > 0 && embedConfirmed
+  const subheading = !appEnabled
+    ? `${shopName} · BadgeFlow is switched off in Settings, so no badges are showing`
+    : stats.live > 0 && embedConfirmed
     ? `${shopName} · badges are showing on your storefront`
     : stats.live > 0
       ? `${shopName} · turn on the app embed so shoppers can see your badges`
@@ -280,7 +297,7 @@ export default function Index() {
                 <s-button href={storefrontUrl} target="_blank">Open storefront</s-button>
               </div>
               {preview.products.length === 0 ? (
-                <s-paragraph color="subdued">Add a product to your store to see a live preview here.</s-paragraph>
+                <s-paragraph color="subdued">{preview.emptyText}</s-paragraph>
               ) : (
                 <div className="bf-products">
                   {preview.products.map((p) => (

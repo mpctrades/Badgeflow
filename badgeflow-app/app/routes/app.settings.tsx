@@ -4,7 +4,7 @@ import { Link, useActionData, useFetcher, useLoaderData, useNavigation, useSubmi
 import { SaveBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { BADGE_PRESETS, POSITIONS, positionLabel } from "../lib/badges";
+import { BADGE_PRESETS, POSITIONS, badgeTextColor, positionLabel } from "../lib/badges";
 import { BRAND } from "../lib/campaign";
 import { fetchPreviewProducts, formatPrice } from "../lib/shopify-catalog.server";
 import { useEmbedStatus } from "../lib/use-embed-status";
@@ -53,8 +53,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 async function aiAction(shop: string, formData: FormData) {
   const intent = String(formData.get("intent"));
   const current = await db.shopSettings.upsert({ where: { shop }, update: {}, create: { shop } });
-  if (!planHasAi(current.plan)) return { ok: false, isError: true, message: "The AI assistant is part of Premium and Unlimited." };
 
+  // Removing a key always works, so a merchant who downgraded can still
+  // delete the key they stored while on a paid plan.
   if (intent === "ai-remove") {
     await db.shopSettings.update({
       where: { shop },
@@ -62,6 +63,7 @@ async function aiAction(shop: string, formData: FormData) {
     });
     return { ok: true, message: "AI key removed" };
   }
+  if (!planHasAi(current.plan)) return { ok: false, isError: true, message: "The AI assistant is part of Premium and Unlimited." };
 
   const provider = formData.get("aiProvider");
   if (!isProvider(provider)) return { ok: false, isError: true, message: "Choose an AI provider." };
@@ -194,7 +196,7 @@ function badgeStyle(position: string, size: number, color: string): React.CSSPro
     ...(position.endsWith("center")
       ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
       : {}),
-    background: color, color: "#fff", fontWeight: 700, letterSpacing: ".02em",
+    background: color, color: badgeTextColor(color), fontWeight: 700, letterSpacing: ".02em",
     padding: "4px 8px", borderRadius: 4, fontSize: 7 + size / 2, whiteSpace: "nowrap",
   };
 }
@@ -353,8 +355,8 @@ export default function Settings() {
               <div>
                 <s-text fontWeight="bold">Hide badges on sold-out products</s-text>
                 <div className="bfst-muted">
-                  A sale badge on an unavailable product frustrates shoppers. Applies on product, collection and search
-                  pages; cards in other sections (like a home page carousel) can still show the badge.
+                  A sale badge on an unavailable product frustrates shoppers. Applies everywhere badges show: product
+                  pages, collections, search results and product cards in other sections.
                 </div>
               </div>
             </div>
@@ -454,7 +456,19 @@ function AiSettings({ ai }: { ai: AiState }) {
         <s-paragraph>
           Connect your own Claude or OpenAI key and describe campaigns in plain words. Included with Premium and Unlimited.
         </s-paragraph>
-        <s-button href="/app/plan">See plans</s-button>
+        <s-stack direction="inline" gap="small-200">
+          <s-button href="/app/plan">See plans</s-button>
+          {ai.keyHint && (
+            <s-button
+              tone="critical"
+              variant="tertiary"
+              onClick={() => fetcher.submit({ intent: "ai-remove" }, { method: "post" })}
+              loading={fetcher.state !== "idle"}
+            >
+              Remove stored key ending {ai.keyHint}
+            </s-button>
+          )}
+        </s-stack>
       </s-section>
     );
   }

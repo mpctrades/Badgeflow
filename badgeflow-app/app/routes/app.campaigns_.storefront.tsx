@@ -2,7 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect, useActionData, useLoaderData, useNavigation, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { positionLabel } from "../lib/badges";
+import { badgeTextColor, positionLabel } from "../lib/badges";
 import {
   blockingCampaign, PLANS, runningWindows, statusLabel, statusTone, storefrontStatus, type PlanId,
 } from "../lib/campaign";
@@ -66,7 +66,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             blocker: blocker ? { id: blocker.id, name: blocker.badgeLabel, endless: !blocker.endAt } : null,
           }
         : null,
-    notShown: !published && (status === "live" || status === "scheduled"),
+    // Why a live or scheduled campaign isn't on the storefront: the sync
+    // itself failed, or none of its products made it in.
+    notShown: !published && (status === "live" || status === "scheduled") ? (sync.ok ? "products" : "sync") : null,
     timezone: tz,
     shopName: shopInfo.name,
     embedConfirmed: !!settings.embedConfirmedAt,
@@ -100,7 +102,7 @@ function badgeStyle(position: string, size: number, color: string): React.CSSPro
     ...(position.endsWith("center")
       ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
       : {}),
-    background: color, color: "#fff", fontWeight: 700,
+    background: color, color: badgeTextColor(color), fontWeight: 700,
     padding: "4px 8px", borderRadius: 4, fontSize: 6 + size / 2, whiteSpace: "nowrap",
   };
 }
@@ -157,18 +159,26 @@ export default function StorefrontPreview() {
               tone="critical"
               variant="primary"
               loading={ending}
-              command="--hide"
-              commandFor="bf-end-blocker"
-              onClick={() => submit({ intent: "end-blocker", blockerId: blocker.id }, { method: "post" })}
+              onClick={() => {
+                submit({ intent: "end-blocker", blockerId: blocker.id }, { method: "post" });
+                shopify.modal.hide("bf-end-blocker");
+              }}
             >
               End campaign
             </s-button>
             <s-button slot="secondary-actions" command="--hide" commandFor="bf-end-blocker">Cancel</s-button>
           </s-modal>
         )}
-        {notShown && (
+        {notShown === "sync" && (
           <s-banner tone="warning">
-            None of this campaign&apos;s products fit in your plan&apos;s product limit right now, so it shows no badges.{" "}
+            Your storefront couldn&apos;t be updated just now, so this campaign may not show yet. Reload this page in a
+            minute.
+          </s-banner>
+        )}
+        {notShown === "products" && (
+          <s-banner tone="warning">
+            None of this campaign&apos;s products can carry the badge right now: they may have been deleted, archived
+            or removed from the collection, or they&apos;re past your plan&apos;s product limit.{" "}
             <s-link href="/app/plan">See plans</s-link>
           </s-banner>
         )}
@@ -206,8 +216,10 @@ export default function StorefrontPreview() {
                     <span style={badgeStyle(campaign.position, campaign.size, campaign.badgeColor)}>{campaign.badgeText}</span>
                   </div>
                   <s-box padding="small-200">
-                    <s-text fontWeight="bold">{p.title}</s-text>
-                    <s-text color="subdued" fontSize="small">{p.price}</s-text>
+                    <s-stack direction="block" gap="small-500">
+                      <s-text fontWeight="bold">{p.title}</s-text>
+                      <s-text color="subdued" fontSize="small">{p.price}</s-text>
+                    </s-stack>
                   </s-box>
                 </s-box>
               ))}

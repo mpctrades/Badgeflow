@@ -78,3 +78,14 @@ export const TARGET_TYPES = [
   { value: "collection", label: "Collection" },
   { value: "products", label: "Individual products" },
 ] as const;
+
+// Text colour for a badge background. Must match textColor() in the
+// storefront script (extensions/badgeflow-badges/assets/badgeflow.js) so
+// admin previews look like the real badge.
+export function badgeTextColor(hex: string): string {
+  let h = String(hex || "").replace("#", "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  if (Number.isNaN(r + g + b)) return "#fff";
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? "#1a1a1a" : "#fff";
+}

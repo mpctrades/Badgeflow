@@ -18,20 +18,25 @@
       "showSample": {{ block.settings.show_sample | json }},
       "productHandle": {% if template.name == 'product' and product %}{{ product.handle | json }}{% else %}null{% endif %},
       "productAvailable": {% if template.name == 'product' and product %}{{ product.available | json }}{% else %}null{% endif %},
-      "soldOut": [
+      "availability": {
+        {%- comment -%}
+          Availability for the first products of this collection or search, so
+          most cards need no lookup. Cards beyond these (later pages, infinite
+          scroll, other sections) are checked by badgeflow.js.
+        {%- endcomment -%}
         {%- assign bf_first = true -%}
         {%- if template.name == 'collection' and collection -%}
           {%- for p in collection.products limit: 50 -%}
-            {%- unless p.available -%}{%- unless bf_first -%},{%- endunless -%}{{ p.handle | json }}{%- assign bf_first = false -%}{%- endunless -%}
+            {%- unless bf_first -%},{%- endunless -%}{{ p.handle | json }}:{{ p.available | json }}{%- assign bf_first = false -%}
           {%- endfor -%}
         {%- elsif template.name == 'search' and search.performed -%}
           {%- for item in search.results limit: 50 -%}
             {%- if item.object_type == 'product' -%}
-              {%- unless item.available -%}{%- unless bf_first -%},{%- endunless -%}{{ item.handle | json }}{%- assign bf_first = false -%}{%- endunless -%}
+              {%- unless bf_first -%},{%- endunless -%}{{ item.handle | json }}:{{ item.available | json }}{%- assign bf_first = false -%}
             {%- endif -%}
           {%- endfor -%}
         {%- endif -%}
-      ]
+      }
     }
   </script>
 {%- endif -%}

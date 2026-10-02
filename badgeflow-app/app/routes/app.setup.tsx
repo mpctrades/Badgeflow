@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
+import { badgeTextColor } from "../lib/badges";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { PLANS, productsLabel, runningWindows, setupSteps, storefrontStatus, type PlanId } from "../lib/campaign";
@@ -195,7 +196,7 @@ export default function Setup() {
                   <s-icon type="image" tone="neutral" />
                 </div>
               )}
-              <span style={{ position: "absolute", top: 6, left: 6, background: badge.badgeColor, color: "#fff", fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 3 }}>
+              <span style={{ position: "absolute", top: 6, left: 6, background: badge.badgeColor, color: badgeTextColor(badge.badgeColor), fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 3 }}>
                 {badge.badgeText}
               </span>
             </div>

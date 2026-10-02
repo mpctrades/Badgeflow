@@ -93,9 +93,14 @@ export async function saveCampaign({
   }
 
   // Schedule, in the shop's timezone.
-  const { ianaTimezone } = await fetchShopInfo(admin);
+  const { ianaTimezone, timezoneKnown } = await fetchShopInfo(admin);
   const now = new Date();
   const startNow = str(formData, "startMode") !== "date";
+  // Dates are entered in the shop's timezone; guessing UTC would silently
+  // shift the schedule by hours.
+  if (!timezoneKnown && (!startNow || str(formData, "hasEnd") === "1")) {
+    errors.startAt = "Couldn't read your store's timezone from Shopify just now. Try again in a moment.";
+  }
   let startAt: Date | null = startNow ? now : zonedToUtc(str(formData, "startDate"), str(formData, "startTime", "00:00"), ianaTimezone);
   if (!startAt) {
     if (intent === "publish") errors.startAt = "Pick a valid start date and time";

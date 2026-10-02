@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import "@shopify/shopify-app-react-router/adapters/node";
 import {
   ApiVersion,
@@ -54,10 +55,44 @@ const authenticateAdmin = ((request: Request) => {
   return shopify.authenticate.admin(request);
 }) as typeof shopify.authenticate.admin;
 
+// With expiring offline tokens, authenticate.webhook refreshes a stored token
+// that has expired before handing it over. After an uninstall (or a closed
+// store) that refresh can never succeed, so the library answers a valid
+// webhook with a bare 500 and Shopify keeps retrying app/uninstalled and
+// shop/redact. None of our webhook handlers call the Admin API, so once the
+// HMAC checks out, drop the dead session and authenticate again without it.
+async function verifiedWebhookShop(request: Request): Promise<string | null> {
+  const hmac = request.headers.get("X-Shopify-Hmac-Sha256") ?? "";
+  const shop = request.headers.get("X-Shopify-Shop-Domain") ?? "";
+  const digest = createHmac("sha256", process.env.SHOPIFY_API_SECRET || "")
+    .update(Buffer.from(await request.arrayBuffer()))
+    .digest();
+  const given = Buffer.from(hmac, "base64");
+  if (!shop || given.length !== digest.length || !timingSafeEqual(given, digest)) return null;
+  return shop;
+}
+
+const authenticateWebhook = (async (request: Request) => {
+  const retry = request.clone();
+  const recheck = request.clone();
+  try {
+    return await shopify.authenticate.webhook(request);
+  } catch (error) {
+    // 4xx Responses are the library rejecting the request itself (bad HMAC,
+    // wrong method, missing headers); pass those straight through.
+    if (error instanceof Response && error.status < 500) throw error;
+    const shop = await verifiedWebhookShop(recheck);
+    if (!shop) throw error;
+    console.warn(`[BadgeFlow] offline token refresh failed for ${shop}; dropping its session`);
+    await prisma.session.deleteMany({ where: { shop, isOnline: false } });
+    return shopify.authenticate.webhook(retry);
+  }
+}) as typeof shopify.authenticate.webhook;
+
 export default shopify;
 export const apiVersion = ApiVersion.July26;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
-export const authenticate = { ...shopify.authenticate, admin: authenticateAdmin };
+export const authenticate = { ...shopify.authenticate, admin: authenticateAdmin, webhook: authenticateWebhook };
 export const unauthenticated = shopify.unauthenticated;
 export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;

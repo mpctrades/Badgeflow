@@ -121,7 +121,8 @@ export async function fetchTotalProductCount(admin: AdminGraphqlClient): Promise
   );
 }
 
-export type ShopInfo = { name: string; ianaTimezone: string };
+// timezoneKnown is false when Shopify couldn't be asked and UTC is a guess.
+export type ShopInfo = { name: string; ianaTimezone: string; timezoneKnown: boolean };
 
 export async function fetchShopInfo(admin: AdminGraphqlClient): Promise<ShopInfo> {
   return query(
@@ -130,8 +131,12 @@ export async function fetchShopInfo(admin: AdminGraphqlClient): Promise<ShopInfo
     `#graphql
       query BadgeFlowShopInfo { shop { name ianaTimezone } }`,
     undefined,
-    (data) => ({ name: data?.shop?.name ?? "Your store", ianaTimezone: data?.shop?.ianaTimezone ?? "UTC" }),
-    { name: "Your store", ianaTimezone: "UTC" },
+    (data) => ({
+      name: data?.shop?.name ?? "Your store",
+      ianaTimezone: data?.shop?.ianaTimezone ?? "UTC",
+      timezoneKnown: Boolean(data?.shop?.ianaTimezone),
+    }),
+    { name: "Your store", ianaTimezone: "UTC", timezoneKnown: false },
   );
 }
 

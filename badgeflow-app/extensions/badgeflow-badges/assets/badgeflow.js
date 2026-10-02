@@ -29,8 +29,17 @@
   var config = readJson("badgeflow-config") || {};
   var context = readJson("badgeflow-context") || {};
   var rules = config.rules || {};
-  // Sold-out products on this collection or search page (from Liquid).
-  var soldOut = new Set((context.soldOut || []).map(function (h) { return String(h).toLowerCase(); }));
+  // handle -> available. Seeded from Liquid (this page's collection or search
+  // results and the current product); other cards are looked up on demand.
+  var availability = {};
+  var seed = context.availability || {};
+  for (var key in seed) availability[String(key).toLowerCase()] = seed[key] !== false;
+  if (context.productHandle && context.productAvailable != null) {
+    availability[String(context.productHandle).toLowerCase()] = context.productAvailable !== false;
+  }
+  var pendingLookups = {};
+  var lookupCount = 0;
+  var MAX_LOOKUPS = 60;
   // Links in these areas are navigation, not product cards.
   var SKIP_AREAS = "header, nav, footer, [role='navigation'], .breadcrumb, .breadcrumbs, [aria-label='breadcrumb'], .cart-drawer, cart-drawer, .predictive-search";
   var MIN_IMAGE_PX = 60;
@@ -42,6 +51,8 @@
       var end = c.endAt ? Date.parse(c.endAt) : Infinity;
       return !isNaN(start) && now >= start && now < end;
     });
+    // Switched off in BadgeFlow: the theme editor shows only the sample.
+    if (config.enabled === false) list = [];
     if (!list.length && context.designMode && context.showSample) {
       list = [{ id: "sample", text: "SALE", color: "#E33C2B", position: "top-left", size: 12, all: true, createdAt: "" }];
     }
@@ -74,6 +85,24 @@
     var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
     if (isNaN(r + g + b)) return "#fff";
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? "#1a1a1a" : "#fff";
+  }
+
+  // Shopify's Ajax product endpoint tells us whether a card's product is in
+  // stock. Until the answer arrives the card gets no badge, so a sold-out
+  // product never flashes one; a failed lookup falls back to showing it.
+  function isAvailable(handle) {
+    if (handle in availability) return availability[handle];
+    if (!pendingLookups[handle] && lookupCount < MAX_LOOKUPS && window.fetch) {
+      lookupCount++;
+      pendingLookups[handle] = true;
+      var root = (window.Shopify && window.Shopify.routes && window.Shopify.routes.root) || "/";
+      fetch(root + "products/" + encodeURIComponent(handle) + ".js", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (p) { availability[handle] = !p || p.available !== false; })
+        .catch(function () { availability[handle] = true; })
+        .then(function () { delete pendingLookups[handle]; schedule(); });
+    }
+    return lookupCount >= MAX_LOOKUPS && !pendingLookups[handle] ? true : null;
   }
 
   function mediaContainerFor(img) {
@@ -148,7 +177,9 @@
       if (a.closest(SKIP_AREAS)) return;
       var handle = handleFromHref(a.getAttribute("href"));
       if (!handle) return;
-      if (rules.hideSoldOut !== false && soldOut.has(handle)) return;
+      var matches = campaignsFor(handle, active);
+      if (!matches.length) return;
+      if (rules.hideSoldOut !== false && isAvailable(handle) !== true) return;
       // Walk up to the card: the nearest ancestor that contains a product
       // image, without climbing into a container shared with other products.
       var card = a, img = a.querySelector("img");
@@ -164,7 +195,7 @@
       var container = mediaContainerFor(img);
       if (!container || seen.has(container)) return;
       seen.add(container);
-      place(container, campaignsFor(handle, active));
+      place(container, matches);
     });
   }
 
@@ -206,12 +237,16 @@
     run();
     window.addEventListener("resize", schedule);
     // Themes that load more products (infinite scroll, filters, quick view).
+    // Only new product links or images matter, so busy themes (carousels,
+    // timers) don't trigger a full redraw on every DOM change.
+    var CARD_BITS = 'a[href*="/products/"], img';
     new MutationObserver(function (records) {
       for (var i = 0; i < records.length; i++) {
         var nodes = records[i].addedNodes;
         for (var j = 0; j < nodes.length; j++) {
           var n = nodes[j];
-          if (n.nodeType === 1 && !n.hasAttribute(ATTR + "-badge")) return schedule();
+          if (n.nodeType !== 1 || n.hasAttribute(ATTR + "-badge")) continue;
+          if (n.matches(CARD_BITS) || n.querySelector(CARD_BITS)) return schedule();
         }
       }
     }).observe(document.body, { childList: true, subtree: true });

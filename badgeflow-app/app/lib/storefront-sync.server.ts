@@ -72,7 +72,9 @@ async function firstProductHandles(admin: AdminGraphqlClient, count: number): Pr
   const body = await json(
     await admin.graphql(
       `#graphql
-        query BadgeFlowAllHandles($first: Int!) { products(first: $first, sortKey: TITLE) { nodes { handle } } }`,
+        query BadgeFlowAllHandles($first: Int!) {
+          products(first: $first, sortKey: TITLE, query: "status:active") { nodes { handle } }
+        }`,
       { variables: { first: Math.max(1, Math.min(PAGE_SIZE, count)) } },
     ),
   );
@@ -115,7 +117,11 @@ export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: str
   const running = campaigns
     .filter((c) => windows.has(c.id))
     .sort((a, b) => windows.get(a.id)!.startAt.getTime() - windows.get(b.id)!.startAt.getTime());
-  const badged = new Set<string>();
+  // The product limit caps products badged at the same time, so a campaign
+  // only competes for slots with campaigns whose schedules overlap its own.
+  const accepted: { startAt: number; endAt: number; handles: string[] }[] = [];
+  const overlaps = (a: { startAt: number; endAt: number }, b: { startAt: number; endAt: number }) =>
+    a.startAt < b.endAt && b.startAt < a.endAt;
 
   const published: StorefrontCampaign[] = [];
   for (const c of running) {
@@ -130,7 +136,10 @@ export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: str
       handles = await firstProductHandles(admin, plan.limit);
       all = false;
     }
+    const w = windows.get(c.id)!;
+    const span = { startAt: w.startAt.getTime(), endAt: w.endAt ? w.endAt.getTime() : Infinity };
     if (plan.limit !== Infinity) {
+      const badged = new Set(accepted.filter((a) => overlaps(a, span)).flatMap((a) => a.handles));
       handles = handles.filter((h) => {
         if (badged.has(h)) return true;
         if (badged.size >= plan.limit) return false;
@@ -140,7 +149,7 @@ export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: str
       if (!handles.length) continue;
     }
     if (!all && !handles.length) continue;
-    const w = windows.get(c.id)!;
+    accepted.push({ ...span, handles });
     published.push({
       id: c.id,
       text: c.badgeText,

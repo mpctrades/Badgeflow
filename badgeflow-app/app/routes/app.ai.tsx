@@ -4,7 +4,7 @@ import { useFetcher, useLoaderData } from "react-router";
 import type { CallbackEvent } from "@shopify/polaris-types";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { positionLabel } from "../lib/badges";
+import { badgeTextColor, positionLabel } from "../lib/badges";
 import { PLANS, type PlanId } from "../lib/campaign";
 import { formatInZone, zonedToUtc } from "../lib/timezone";
 import { fetchPreviewProducts, fetchShopInfo } from "../lib/shopify-catalog.server";
@@ -109,7 +109,7 @@ function overlay(position: string, size: number, color: string): React.CSSProper
     ...(position.endsWith("left") ? { left: "6%" } : {}),
     ...(position.endsWith("right") ? { right: "6%" } : {}),
     ...(position.endsWith("center") ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" } : {}),
-    background: color, color: "#fff", fontWeight: 700, padding: "3px 7px", borderRadius: 4,
+    background: color, color: badgeTextColor(color), fontWeight: 700, padding: "3px 7px", borderRadius: 4,
     fontSize: 6 + size / 2, whiteSpace: "nowrap",
   };
 }

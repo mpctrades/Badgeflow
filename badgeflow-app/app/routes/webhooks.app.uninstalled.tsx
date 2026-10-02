@@ -5,15 +5,15 @@ import { forgetPlan } from "../lib/billing.server";
 import { forgetStorefrontSync } from "../lib/storefront-sync.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shop, session, topic } = await authenticate.webhook(request);
+  const { shop, topic } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  // Webhook requests can trigger multiple times and after an app has already been uninstalled.
-  // If this webhook already ran, the session may have been deleted previously.
-  if (session) {
-    await db.session.deleteMany({ where: { shop } });
-  }
+  // Webhook requests can trigger multiple times and after an app has already
+  // been uninstalled. Always clear every session: the offline one may already
+  // be gone (an expired token is dropped during authentication) while online
+  // sessions remain.
+  await db.session.deleteMany({ where: { shop } });
 
   // Shopify cancels app subscriptions on uninstall, so a reinstall must start
   // on Free and go through charge approval again. The app embed is removed

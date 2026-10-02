@@ -32,11 +32,37 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const live = statuses.filter((st) => st === "live");
   const scheduledCount = statuses.filter((st) => st === "scheduled").length;
 
+  // Products the live campaigns ask for, before the plan limit trims them, so
+  // the page can recommend a plan that really fits. A product in two
+  // campaigns may be counted twice; capped at the catalogue size.
+  const liveCampaigns = campaigns.filter((_, i) => statuses[i] === "live");
+  const targetCounts = await Promise.all(
+    liveCampaigns.map(async (c) => {
+      if (c.targetType === "all") return totalProducts;
+      if (c.targetType === "products") return c.targetRef.split(",").filter(Boolean).length;
+      if (c.targetType !== "collection" || !c.targetRef) return 0;
+      try {
+        const res = await admin.graphql(
+          `#graphql
+            query BadgeFlowCollectionCount($id: ID!) { collection(id: $id) { productsCount { count } } }`,
+          { variables: { id: c.targetRef } },
+        );
+        return (await res.json())?.data?.collection?.productsCount?.count ?? 0;
+      } catch (error) {
+        if (error instanceof Response) throw error;
+        return 0;
+      }
+    }),
+  );
+  const badgedNow = badgedProductCount(sync.config, totalProducts);
+  const wantedProductCount = Math.max(badgedNow, Math.min(totalProducts, targetCounts.reduce((a, b) => a + b, 0)));
+
   return {
     liveCampaignCount: live.length,
     scheduledCount,
     // What the storefront shows now, with the current plan's limits applied.
-    badgedProductCount: badgedProductCount(sync.config, totalProducts),
+    badgedProductCount: badgedNow,
+    wantedProductCount,
     plan: billing.plan,
     billing,
     trialEnds: billing.trialEndsAt ? formatDateInZone(billing.trialEndsAt, shopInfo.ianaTimezone) : null,
@@ -105,7 +131,7 @@ function monthlyPrice(id: PlanId): number {
 }
 
 export default function Plan() {
-  const { liveCampaignCount, scheduledCount, badgedProductCount, plan, billing, trialEnds, pricingUrl } =
+  const { liveCampaignCount, scheduledCount, badgedProductCount, wantedProductCount, plan, billing, trialEnds, pricingUrl } =
     useLoaderData<typeof loader>();
   // Shopify redirects to /app/plan?plan_handle=… after the merchant approves a plan.
   const { show } = useToast();
@@ -129,7 +155,7 @@ export default function Plan() {
   // Only ever recommends an upgrade: if the current plan already fits, nothing
   // is recommended (never suggest a cheaper plan as "fits your store").
   const fitting =
-    ORDER.find((id) => PLANS[id].limit >= badgedProductCount && PLANS[id].liveCampaignLimit >= wantedCampaigns) ??
+    ORDER.find((id) => PLANS[id].limit >= wantedProductCount && PLANS[id].liveCampaignLimit >= wantedCampaigns) ??
     "unlimited";
   const recommended: PlanId | null = ORDER.indexOf(fitting) > ORDER.indexOf(plan) ? fitting : null;
 
@@ -141,10 +167,11 @@ export default function Plan() {
     const p = PLANS[id];
     const parts: string[] = [];
     if (limit !== Infinity) {
+      const more = p.limit === Infinity ? "unlimited products" : `${p.limit - limit} more`;
       parts.push(
-        `You're using ${badgedProductCount} of ${limit} slots — this gives you ${
-          p.limit === Infinity ? "unlimited products" : `${p.limit - limit} more`
-        }`,
+        wantedProductCount > limit
+          ? `Your live campaigns target ${wantedProductCount} products but only ${limit} can carry a badge — this gives you ${more}`
+          : `You're using ${badgedProductCount} of ${limit} slots — this gives you ${more}`,
       );
     }
     if (wantedCampaigns > liveLimit) parts.push(`lets all ${wantedCampaigns} campaigns run together`);
