@@ -61,15 +61,27 @@ const authenticateAdmin = ((request: Request) => {
 // webhook with a bare 500 and Shopify keeps retrying app/uninstalled and
 // shop/redact. None of our webhook handlers call the Admin API, so once the
 // HMAC checks out, drop the dead session and authenticate again without it.
+//
+// The HMAC covers the body but not the X-Shopify-Shop-Domain header, so a
+// replayed webhook could carry another shop's domain in the header. Only
+// trust the shop when the signed body names the same one (shop_domain for
+// the compliance topics, myshopify_domain for app/uninstalled).
 async function verifiedWebhookShop(request: Request): Promise<string | null> {
   const hmac = request.headers.get("X-Shopify-Hmac-Sha256") ?? "";
   const shop = request.headers.get("X-Shopify-Shop-Domain") ?? "";
-  const digest = createHmac("sha256", process.env.SHOPIFY_API_SECRET || "")
-    .update(Buffer.from(await request.arrayBuffer()))
-    .digest();
+  const body = Buffer.from(await request.arrayBuffer());
+  const digest = createHmac("sha256", process.env.SHOPIFY_API_SECRET || "").update(body).digest();
   const given = Buffer.from(hmac, "base64");
   if (!shop || given.length !== digest.length || !timingSafeEqual(given, digest)) return null;
-  return shop;
+
+  let payload: { shop_domain?: unknown; myshopify_domain?: unknown };
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    return null;
+  }
+  const signedShop = payload?.shop_domain ?? payload?.myshopify_domain;
+  return typeof signedShop === "string" && signedShop === shop ? shop : null;
 }
 
 const authenticateWebhook = (async (request: Request) => {
