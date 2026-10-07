@@ -3,7 +3,7 @@ import { useNavigate, useNavigation, useSubmit } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { CallbackEvent } from "@shopify/polaris-types";
 import { BADGE_PRESETS, POSITIONS, badgeTextColor, claimWarning, positionLabel } from "../lib/badges";
-import { PLANS, type PlanId } from "../lib/campaign";
+import { PLANS, productCount, type PlanId } from "../lib/campaign";
 import { formatInZone, TIME_OPTIONS, zonedToUtc } from "../lib/timezone";
 import type { PreviewProduct } from "../lib/shopify-catalog.server";
 import { useEmbedStatus } from "../lib/use-embed-status";
@@ -187,7 +187,7 @@ export function CampaignWizard({
       ? "All products"
       : targetType === "collection"
         ? collection
-          ? `${collection.title} — ${collection.count} products`
+          ? `${collection.title} — ${productCount(collection.count)}`
           : "No collection chosen"
         : `${products.length} individual product${products.length === 1 ? "" : "s"}`;
   const targetRef = targetType === "all" ? "" : targetType === "collection" ? (collection?.id ?? "") : products.map((p) => p.id).join(",");
@@ -495,7 +495,7 @@ export function CampaignWizard({
 
                   {targetType === "collection" && (
                     <s-stack direction="inline" gap="base" alignItems="center">
-                      <s-text fontWeight="bold">{collection ? `${collection.title} · ${collection.count} products` : "No collection chosen yet"}</s-text>
+                      <s-text fontWeight="bold">{collection ? `${collection.title} · ${productCount(collection.count)}` : "No collection chosen yet"}</s-text>
                       <s-button onClick={pickCollection}>{collection ? "Change collection" : "Choose collection"}</s-button>
                     </s-stack>
                   )}

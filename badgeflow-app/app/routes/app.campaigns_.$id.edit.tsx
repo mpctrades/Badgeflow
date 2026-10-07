@@ -2,7 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import type { PlanId } from "../lib/campaign";
+import { productCount, type PlanId } from "../lib/campaign";
 import {
   fetchCollection,
   fetchPickedProducts,
@@ -49,7 +49,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     targetType: campaign.targetType,
     targetRef: campaign.targetRef,
     // Fresh label from Shopify, so a renamed or resized collection shows correctly.
-    targetLabel: collection ? `${collection.title} — ${collection.productsCount} products` : campaign.targetValue,
+    targetLabel: collection ? `${collection.title} — ${productCount(collection.productsCount)}` : campaign.targetValue,
     targetCount: collection?.productsCount,
     pickedProducts: pickedProducts.map((p) => ({ id: p.id, title: p.title })),
     // A duplicate starts as a fresh copy: same design and products, new schedule.

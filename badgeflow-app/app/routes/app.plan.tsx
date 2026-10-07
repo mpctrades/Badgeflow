@@ -98,7 +98,7 @@ const FEATURES: Record<PlanId, { label: string; included: boolean }[]> = {
 };
 
 const TAGLINES: Record<PlanId, string> = {
-  free: "Enough to prove badges lift your conversion.",
+  free: "Everything you need to run your first badge campaigns.",
   premium: "For growing catalogues running several campaigns at once.",
   unlimited: `For catalogues above ${PLANS.premium.limit} products.`,
 };

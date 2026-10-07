@@ -3,7 +3,7 @@
 // draft — saving it (as a draft) and publishing are separate merchant actions.
 import db from "../../db.server";
 import { BADGE_PRESETS, claimWarning } from "../badges";
-import { PLANS, type PlanId } from "../campaign";
+import { PLANS, productCount, type PlanId } from "../campaign";
 import { utcToZoned, zonedToUtc } from "../timezone";
 import { fetchShopInfo } from "../shopify-catalog.server";
 import { decryptSecret } from "./crypto.server";
@@ -143,7 +143,7 @@ async function resolveDraft(
       targetType = "all";
     } else {
       targetRef = c.id;
-      targetLabel = `${c.title} — ${c.count} products`;
+      targetLabel = `${c.title} — ${productCount(c.count)}`;
       targetCount = c.count;
     }
   } else if (targetType === "products") {

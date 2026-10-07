@@ -37,6 +37,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ? {
           name: featured.badgeLabel,
           isLive: live.includes(featured),
+          status: storefrontStatus(featured, windows),
           products: productsLabel(featured).toLowerCase(),
           badgeText: featured.badgeText,
           badgeColor: featured.badgeColor,
@@ -233,9 +234,10 @@ export default function Setup() {
       return "BadgeFlow can draw on your product cards in your live theme.";
     }
     if (key === "campaign" && featured) {
-      return featured.isLive
-        ? `${featured.name} is live on ${featured.products}.`
-        : `${featured.name} is ready for ${featured.products}.`;
+      if (featured.isLive) return `${featured.name} is live on ${featured.products}.`;
+      if (featured.status === "ended") return `${featured.name} has ended — create a new campaign for your next promotion.`;
+      if (featured.status === "draft") return `${featured.name} is saved as a draft for ${featured.products}.`;
+      return `${featured.name} is scheduled for ${featured.products}.`;
     }
     return "Open your storefront any time to check how badges look on your theme.";
   }

@@ -37,13 +37,14 @@ export const BADGE_PRESETS: BadgePreset[] = [
 // the merchant must only use them where the claim is true (App Store
 // requirement 1.1.4).
 export function claimWarning(presetId: string, text: string): string | null {
-  const preset = BADGE_PRESETS.find((b) => b.id === presetId);
-  const category = preset?.category;
-  const upper = text.toUpperCase();
-  if (category === "Sale" || /SALE|%|OFF\b|CLEARANCE/.test(upper)) {
+  const upper = text.trim().toUpperCase();
+  // The preset only counts while its text is kept; once the merchant writes
+  // their own text ("TEST BADGE"), judge that text alone.
+  const preset = BADGE_PRESETS.find((b) => b.id === presetId && b.label.toUpperCase() === upper);
+  if (preset?.category === "Sale" || /SALE|%|OFF\b|CLEARANCE/.test(upper)) {
     return "A sale badge only changes what shoppers see on the image — it doesn't create a Shopify discount. Set up the actual discount separately, and only show it while the offer is real.";
   }
-  if (presetId === "back-in-stock" || /STOCK|LAST UNITS|SELLING FAST/.test(upper)) {
+  if (preset?.id === "back-in-stock" || /STOCK|LAST UNITS|SELLING FAST/.test(upper)) {
     return "BadgeFlow doesn't check inventory. Only put stock badges on products where they're true, and end the campaign when they stop being true.";
   }
   if (/BEST ?SELLER|POPULAR|TRENDING/.test(upper)) {

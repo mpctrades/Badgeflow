@@ -89,16 +89,22 @@ export function blockingCampaign<T extends Schedulable>(
   return others.find((c) => windows.get(c.id)!.endAt === null) ?? null;
 }
 
+// "1 product", "12 products".
+export function productCount(n: number): string {
+  return `${n} product${n === 1 ? "" : "s"}`;
+}
+
 // "All products", "12 products", or the collection's stored count suffix
-// ("Autumn Essentials — 42 products" → "42 products").
+// ("Autumn Essentials — 42 products" → "42 products"). Older campaigns stored
+// "1 products", so the suffix is re-pluralised.
 export function productsLabel(c: { targetType: string; targetRef: string; targetValue: string }): string {
   if (c.targetType === "all") return "All products";
   if (c.targetType === "products") {
-    const n = c.targetRef.split(",").map((h) => h.trim()).filter(Boolean).length;
-    return `${n} product${n === 1 ? "" : "s"}`;
+    return productCount(c.targetRef.split(",").map((h) => h.trim()).filter(Boolean).length);
   }
   const idx = c.targetValue.lastIndexOf(" — ");
-  return idx === -1 ? c.targetValue : c.targetValue.slice(idx + 3);
+  const suffix = idx === -1 ? c.targetValue : c.targetValue.slice(idx + 3);
+  return suffix.replace(/^1 products$/, "1 product");
 }
 
 export const PLANS: Record<PlanId, { label: string; limit: number; price: string; period: string; liveCampaignLimit: number }> = {
