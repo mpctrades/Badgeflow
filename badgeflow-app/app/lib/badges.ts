@@ -47,6 +47,9 @@ export function claimWarning(presetId: string, text: string): string | null {
   if (preset?.id === "back-in-stock" || /STOCK|LAST UNITS|SELLING FAST/.test(upper)) {
     return "BadgeFlow doesn't check inventory. Only put stock badges on products where they're true, and end the campaign when they stop being true.";
   }
+  if (preset?.category === "Shipping" || /FREE SHIP/.test(upper)) {
+    return "BadgeFlow doesn't change shipping rates. Only show this badge on products that really ship free, and set up free shipping in Shopify first.";
+  }
   if (/BEST ?SELLER|POPULAR|TRENDING/.test(upper)) {
     return "BadgeFlow doesn't check sales. Only use this badge on products that really are your best sellers.";
   }

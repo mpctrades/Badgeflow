@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { redirect, useActionData, useLoaderData } from "react-router";
+import { useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { productCount, type PlanId } from "../lib/campaign";
@@ -15,7 +15,7 @@ import { saveCampaign } from "../lib/campaign-form.server";
 import { utcToZoned } from "../lib/timezone";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, redirect } = await authenticate.admin(request);
   const url = new URL(request.url);
   const isDuplicate = url.searchParams.get("duplicate") === "1";
 

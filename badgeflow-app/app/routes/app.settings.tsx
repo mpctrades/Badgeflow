@@ -34,7 +34,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const product = previewProducts[0] ?? null;
   const price = product ? formatPrice(product.price, product.currency) : null;
   return {
-    settings,
+    // The AI key never leaves the server, not even encrypted.
+    settings: { ...settings, aiKeyCipher: null },
     // Stacking several badges on one product is a Premium feature.
     canStack: settings.plan !== "free",
     ai: {

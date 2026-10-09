@@ -28,7 +28,7 @@ export default function App() {
         <div className={styles.mark}>BadgeFlow</div>
         <h1 className={styles.heading}>Put the right badge on the right products, on a schedule.</h1>
         <p className={styles.text}>
-          Sale, new-arrival, and back-in-stock badges on your product images — scheduled, previewed, and reviewed before they ever reach shoppers.
+          Sale, new-arrival, and holiday badges on your product images — scheduled, previewed, and reviewed before they ever reach shoppers.
         </p>
         <p className={styles.note}>
           BadgeFlow runs inside your Shopify admin. Install it from the Shopify App Store, then open it from{" "}

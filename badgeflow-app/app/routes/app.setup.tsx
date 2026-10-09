@@ -28,7 +28,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const product = previewProducts[0] ?? null;
 
   return {
-    settings,
+    // The AI key never leaves the server, not even encrypted.
+    settings: { ...settings, aiKeyCipher: null },
     campaignCount: campaigns.length,
     storefrontUrl: `https://${session.shop}`,
     // eslint-disable-next-line no-undef

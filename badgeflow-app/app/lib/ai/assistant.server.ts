@@ -220,6 +220,8 @@ export async function runAssistant(admin: AdminGraphqlClient, shop: string, hist
     .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
     .slice(-MAX_HISTORY)
     .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
+  // The window can open on an assistant reply; the conversation must start with the merchant.
+  while (messages[0]?.role === "assistant") messages.shift();
   if (!messages.length || messages[0]!.role !== "user") return { ok: false, error: "Type what you'd like to badge." };
 
   const [shopInfo, collections] = await Promise.all([fetchShopInfo(admin), listCollections(admin)]);

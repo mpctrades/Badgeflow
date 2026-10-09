@@ -39,6 +39,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     let draft: ResolvedDraft;
     try {
       draft = JSON.parse(String(formData.get("draft") ?? ""));
+      if (!draft || typeof draft !== "object") throw new Error("not a draft");
     } catch {
       return { ok: false, error: "That draft couldn't be read. Ask the assistant again." } satisfies AssistantResult;
     }
@@ -70,7 +71,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   let history: ChatMessage[] = [];
   try {
     const parsed = JSON.parse(String(formData.get("history") ?? "[]"));
-    if (Array.isArray(parsed)) history = parsed;
+    if (Array.isArray(parsed)) {
+      history = parsed.filter((m): m is ChatMessage => !!m && typeof m === "object" && typeof m.content === "string");
+    }
   } catch {
     // Treated as an empty conversation below.
   }

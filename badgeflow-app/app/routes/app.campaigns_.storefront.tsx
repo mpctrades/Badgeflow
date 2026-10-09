@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { redirect, useActionData, useLoaderData, useNavigation, useSubmit } from "react-router";
+import { useActionData, useLoaderData, useNavigation, useSubmit } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { badgeTextColor, positionLabel } from "../lib/badges";
@@ -13,7 +13,7 @@ import { campaignToasts, useActionToast, useQueryToast } from "../lib/use-toast"
 import { useEmbedStatus } from "../lib/use-embed-status";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, redirect } = await authenticate.admin(request);
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
 
@@ -83,8 +83,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   if (formData.get("intent") !== "end-blocker") return null;
   const id = String(formData.get("blockerId") ?? "");
-  const { count } = await db.campaign.updateMany({ where: { id, shop: session.shop }, data: { endAt: new Date() } });
-  if (count === 0) return { ok: false, isError: true, message: "That campaign no longer exists." };
+  const now = new Date();
+  // A running blocker ends now; one that hasn't started yet goes back to
+  // draft, so it never ends before it began.
+  const ended = await db.campaign.updateMany({
+    where: { id, shop: session.shop, isDraft: false, startAt: { lte: now } },
+    data: { endAt: now },
+  });
+  const unscheduled = ended.count
+    ? ended
+    : await db.campaign.updateMany({ where: { id, shop: session.shop, isDraft: false, startAt: { gt: now } }, data: { isDraft: true } });
+  if (unscheduled.count === 0) return { ok: false, isError: true, message: "That campaign no longer exists." };
   const { ok } = await syncStorefront(admin, session.shop);
   return ok
     ? { ok: true, message: "Campaign ended — this one can start now" }

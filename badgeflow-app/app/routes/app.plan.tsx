@@ -274,7 +274,7 @@ export default function Plan() {
                 ) : (
                   // Shopify's plan selection page handles approval, decline,
                   // proration and trials.
-                  <s-button href={pricingUrl} inlineSize="fill" variant={isRec ? "primary" : "secondary"}>
+                  <s-button href={pricingUrl} target="_top" inlineSize="fill" variant={isRec ? "primary" : "secondary"}>
                     {ORDER.indexOf(id) > ORDER.indexOf(plan) ? `Upgrade to ${p.label}` : `Switch to ${p.label}`}
                   </s-button>
                 )}

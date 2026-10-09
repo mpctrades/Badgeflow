@@ -8,7 +8,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const current = (payload as { current?: unknown }).current;
   if (session && Array.isArray(current)) {
-    await db.session.update({
+    // updateMany: the session can be gone by now (uninstall, dropped expired
+    // token), and a missing row must not turn the webhook into a 500.
+    await db.session.updateMany({
       where: { id: session.id },
       data: { scope: current.map(String).join(",") },
     });
