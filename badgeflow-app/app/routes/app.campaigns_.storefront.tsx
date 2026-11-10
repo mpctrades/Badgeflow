@@ -3,6 +3,7 @@ import { useActionData, useLoaderData, useNavigation, useSubmit } from "react-ro
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { badgeTextColor, positionLabel } from "../lib/badges";
+import { kindRule, previewText, shapeRadius } from "../lib/smart-badges";
 import {
   blockingCampaign, PLANS, runningWindows, statusLabel, statusTone, storefrontStatus, type PlanId,
 } from "../lib/campaign";
@@ -47,8 +48,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     campaign: {
       id: campaign.id,
       name: campaign.badgeLabel,
-      badgeText: campaign.badgeText,
+      badgeText: previewText(campaign.badgeKind, campaign.badgeText),
       badgeColor: campaign.badgeColor,
+      radius: shapeRadius(campaign.shape),
+      rule: kindRule(campaign.badgeKind, { minDiscount: campaign.minDiscount, newDays: campaign.newDays }),
+      exampleNote: campaign.badgeKind === "sale" ? "Shown as if 25% off — each product shows its own discount." : null,
       position: campaign.position,
       size: campaign.size,
       mobile:
@@ -69,6 +73,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Why a live or scheduled campaign isn't on the storefront: the sync
     // itself failed, or none of its products made it in.
     notShown: !published && (status === "live" || status === "scheduled") ? (sync.ok ? "products" : "sync") : null,
+    // "All products" on a plan with a product limit: only some get the badge.
+    trimmed:
+      published && !published.all && campaign.targetType === "all" && PLANS[plan].limit !== Infinity
+        ? {
+            count: published.handles.length,
+            limit: PLANS[plan].limit,
+            planLabel: PLANS[plan].label,
+            how:
+              campaign.badgeKind === "sale"
+                ? "products that are on sale first"
+                : campaign.badgeKind === "new"
+                  ? "your newest products first"
+                  : "the first ones alphabetically",
+          }
+        : null,
     timezone: tz,
     shopName: shopInfo.name,
     embedConfirmed: !!settings.embedConfirmedAt,
@@ -100,7 +119,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     : { ok: false, isError: true, message: "Campaign ended, but your storefront couldn't be updated. Try again in a minute." };
 };
 
-function badgeStyle(position: string, size: number, color: string): React.CSSProperties {
+function badgeStyle(position: string, size: number, color: string, radius = "4px"): React.CSSProperties {
   return {
     position: "absolute",
     ...(position.startsWith("top") ? { top: "6%" } : {}),
@@ -112,12 +131,12 @@ function badgeStyle(position: string, size: number, color: string): React.CSSPro
       ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
       : {}),
     background: color, color: badgeTextColor(color), fontWeight: 700,
-    padding: "4px 8px", borderRadius: 4, fontSize: 6 + size / 2, whiteSpace: "nowrap",
+    padding: "4px 8px", borderRadius: radius, fontSize: 6 + size / 2, whiteSpace: "nowrap",
   };
 }
 
 export default function StorefrontPreview() {
-  const { campaign, status, schedule, queued, notShown, timezone, shopName, embedConfirmed, products } =
+  const { campaign, status, schedule, queued, notShown, trimmed, timezone, shopName, embedConfirmed, products } =
     useLoaderData<typeof loader>();
   const embedOn = useEmbedStatus(embedConfirmed).active;
   useQueryToast(campaignToasts(embedOn));
@@ -192,6 +211,15 @@ export default function StorefrontPreview() {
           </s-banner>
         )}
 
+        {trimmed && (
+          <s-banner tone="info" heading={`Showing on ${trimmed.count} products — the ${trimmed.planLabel} plan limit`}>
+            This campaign targets all products, and the {trimmed.planLabel} plan badges up to {trimmed.limit} at a time, so
+            BadgeFlow picks {trimmed.how}. Products outside those show no badge — that&apos;s expected, not a theme
+            problem. Target a collection or tag to choose which products, or{" "}
+            <s-link href="/app/plan">upgrade to badge every product</s-link>.
+          </s-banner>
+        )}
+
         <s-section heading="Campaign">
           <s-stack direction="block" gap="small-200">
             <s-stack direction="inline" gap="small-200" alignItems="center">
@@ -201,6 +229,8 @@ export default function StorefrontPreview() {
             <s-text color="subdued" fontSize="small">
               Products: {campaign.target} · Position: {positionLabel(campaign.position)} · {campaign.size}%
               {campaign.mobile ? ` · Mobile: ${campaign.mobile}` : ""} · Times in {timezone}
+              {campaign.rule ? ` · ${campaign.rule}.` : ""}
+              {campaign.exampleNote ? ` ${campaign.exampleNote}` : ""}
             </s-text>
           </s-stack>
         </s-section>
@@ -222,7 +252,7 @@ export default function StorefrontPreview() {
                         <s-icon type="image" tone="neutral" />
                       </div>
                     )}
-                    <span style={badgeStyle(campaign.position, campaign.size, campaign.badgeColor)}>{campaign.badgeText}</span>
+                    <span style={badgeStyle(campaign.position, campaign.size, campaign.badgeColor, campaign.radius)}>{campaign.badgeText}</span>
                   </div>
                   <s-box padding="small-200">
                     <s-stack direction="block" gap="small-500">

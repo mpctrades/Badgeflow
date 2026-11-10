@@ -4,6 +4,7 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { productCount, type PlanId } from "../lib/campaign";
 import {
+  fetchCatalogStats,
   fetchCollection,
   fetchPickedProducts,
   fetchPreviewProducts,
@@ -13,6 +14,7 @@ import {
 import { CampaignWizard, type WizardInitial } from "../components/campaign-wizard";
 import { saveCampaign } from "../lib/campaign-form.server";
 import { utcToZoned } from "../lib/timezone";
+import { isBadgeKind } from "../lib/smart-badges";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { admin, session, redirect } = await authenticate.admin(request);
@@ -22,13 +24,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const campaign = await db.campaign.findFirst({ where: { id: params.id, shop: session.shop } });
   if (!campaign) throw redirect("/app/campaigns");
 
-  const [totalProducts, settings, previewProducts, shopInfo, collection, pickedProducts] = await Promise.all([
+  const [totalProducts, settings, previewProducts, shopInfo, collection, pickedProducts, catalogStats] = await Promise.all([
     fetchTotalProductCount(admin),
     db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
     fetchPreviewProducts(admin, 4),
     fetchShopInfo(admin),
     campaign.targetType === "collection" ? fetchCollection(admin, campaign.targetRef) : Promise.resolve(null),
     campaign.targetType === "products" ? fetchPickedProducts(admin, campaign.targetRef) : Promise.resolve([]),
+    fetchCatalogStats(admin),
   ]);
 
   const tz = shopInfo.ianaTimezone;
@@ -42,6 +45,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     badgeId: "custom",
     badgeText: campaign.badgeText,
     badgeColor: campaign.badgeColor,
+    badgeKind: isBadgeKind(campaign.badgeKind) ? campaign.badgeKind : "text",
+    minDiscount: campaign.minDiscount,
+    newDays: campaign.newDays,
+    shape: campaign.shape,
     position: campaign.position,
     size: campaign.size,
     mobilePosition: campaign.mobilePosition || campaign.position,
@@ -67,6 +74,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     previewProduct: previewProducts[0] ?? null,
     embedConfirmed: !!settings.embedConfirmedAt,
     timezone: tz,
+    catalogStats,
     initial,
   };
 };
@@ -83,7 +91,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function EditCampaignRoute() {
-  const { totalProducts, plan, previewProduct, embedConfirmed, timezone, initial } = useLoaderData<typeof loader>();
+  const { totalProducts, plan, previewProduct, embedConfirmed, timezone, catalogStats, initial } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -94,6 +102,7 @@ export default function EditCampaignRoute() {
       previewProduct={previewProduct}
       embedConfirmed={embedConfirmed}
       timezone={timezone}
+      catalogStats={catalogStats}
       errors={actionData?.errors ?? {}}
     />
   );

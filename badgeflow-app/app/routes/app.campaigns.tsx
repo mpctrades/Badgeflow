@@ -7,6 +7,7 @@ import {
   BRAND, displayStatus, PLANS, productsLabel, runningWindows, statusTone, storefrontStatus, type CampaignStatus, type PlanId,
 } from "../lib/campaign";
 import { positionLabel } from "../lib/badges";
+import { kindLabel, previewText, shapeRadius } from "../lib/smart-badges";
 import { fetchShopInfo } from "../lib/shopify-catalog.server";
 import { campaignToasts, useActionToast, useQueryToast } from "../lib/use-toast";
 import { syncStorefront } from "../lib/storefront-sync.server";
@@ -107,9 +108,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     campaigns: filtered.map((c) => ({
       id: c.id,
       name: c.badgeLabel,
-      badgeText: c.badgeText,
+      badgeText: previewText(c.badgeKind, c.badgeText),
       badgeColor: c.badgeColor,
-      placement: `${positionLabel(c.position)} · ${c.size}% of image`,
+      radius: shapeRadius(c.shape),
+      placement: `${kindLabel(c.badgeKind) ? `${kindLabel(c.badgeKind)} · ` : ""}${positionLabel(c.position)} · ${c.size}% of image`,
       products: productsLabel(c),
       scheduleStart: c.startAt <= now ? `Since ${fmt.dayMonth(c.startAt)}` : fmt.dayMonthTime(c.startAt),
       scheduleEnd: c.endAt ? `${c.endAt <= now ? "Ended" : "Ends"} ${fmt.dayMonthTime(c.endAt)}` : "No end date",
@@ -352,7 +354,7 @@ export default function Campaigns() {
                         </s-table-cell>
                         <s-table-cell>
                           <Link className="bfc-name" to={`/app/campaigns/${c.id}/edit`}>
-                            <span className="bfc-pill" style={{ background: c.badgeColor }}>{c.badgeText}</span>
+                            <span className="bfc-pill" style={{ background: c.badgeColor, borderRadius: c.radius }}>{c.badgeText}</span>
                             <span style={{ minWidth: 0 }}>
                               <span className="bfc-title" style={{ display: "block" }}>{c.name}</span>
                               <span className="bfc-sub">{c.placement}</span>

@@ -4,7 +4,8 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import type { PlanId } from "../lib/campaign";
 import { BADGE_PRESETS } from "../lib/badges";
-import { fetchPreviewProducts, fetchShopInfo, fetchTotalProductCount } from "../lib/shopify-catalog.server";
+import { NEW_DAYS_DEFAULT, SALE_TEMPLATES } from "../lib/smart-badges";
+import { fetchCatalogStats, fetchPreviewProducts, fetchShopInfo, fetchTotalProductCount } from "../lib/shopify-catalog.server";
 import { CampaignWizard, type WizardInitial } from "../components/campaign-wizard";
 import { saveCampaign } from "../lib/campaign-form.server";
 import { utcToZoned } from "../lib/timezone";
@@ -12,20 +13,28 @@ import { utcToZoned } from "../lib/timezone";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const [totalProducts, settings, previewProducts, shopInfo] = await Promise.all([
+  const [totalProducts, settings, previewProducts, shopInfo, catalogStats] = await Promise.all([
     fetchTotalProductCount(admin),
     db.shopSettings.upsert({ where: { shop: session.shop }, update: {}, create: { shop: session.shop } }),
     fetchPreviewProducts(admin, 4),
     fetchShopInfo(admin),
+    fetchCatalogStats(admin),
   ]);
 
-  // New campaigns start from the store-wide defaults in Settings.
+  // New campaigns start from the store-wide defaults in Settings, as an
+  // automatic sale badge when the store has products on sale (the honest
+  // default: it never shows a discount that isn't real), else fixed text.
   const preset = BADGE_PRESETS.find((b) => b.color.toLowerCase() === settings.defaultColor.toLowerCase()) ?? BADGE_PRESETS[0]!;
   const today = utcToZoned(new Date(), shopInfo.ianaTimezone);
+  const startAsSale = catalogStats.onSale > 0;
   const initial: WizardInitial = {
     badgeId: preset.id,
-    badgeText: preset.label,
+    badgeText: startAsSale ? SALE_TEMPLATES[0] : preset.label,
     badgeColor: settings.defaultColor,
+    badgeKind: startAsSale ? "sale" : "text",
+    minDiscount: 0,
+    newDays: NEW_DAYS_DEFAULT,
+    shape: "rounded",
     position: settings.defaultPosition,
     size: settings.defaultSize,
     mobilePosition: settings.defaultPosition,
@@ -48,6 +57,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     previewProduct: previewProducts[0] ?? null,
     embedConfirmed: !!settings.embedConfirmedAt,
     timezone: shopInfo.ianaTimezone,
+    catalogStats,
     initial,
   };
 };
@@ -58,7 +68,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function NewCampaignRoute() {
-  const { totalProducts, plan, previewProduct, embedConfirmed, timezone, initial } = useLoaderData<typeof loader>();
+  const { totalProducts, plan, previewProduct, embedConfirmed, timezone, catalogStats, initial } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -69,6 +79,7 @@ export default function NewCampaignRoute() {
       previewProduct={previewProduct}
       embedConfirmed={embedConfirmed}
       timezone={timezone}
+      catalogStats={catalogStats}
       errors={actionData?.errors ?? {}}
     />
   );

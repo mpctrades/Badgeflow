@@ -1,11 +1,27 @@
-import { useMemo, useState } from "react";
-import { useNavigate, useNavigation, useSubmit } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { useFetcher, useNavigate, useNavigation, useSubmit } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { CallbackEvent } from "@shopify/polaris-types";
 import { BADGE_PRESETS, POSITIONS, badgeTextColor, claimWarning, positionLabel } from "../lib/badges";
 import { PLANS, productCount, type PlanId } from "../lib/campaign";
 import { formatInZone, TIME_OPTIONS, zonedToUtc } from "../lib/timezone";
-import type { PreviewProduct } from "../lib/shopify-catalog.server";
+import type { CatalogStats, PreviewProduct } from "../lib/shopify-catalog.server";
+import {
+  isNewProduct,
+  kindRule,
+  MIN_DISCOUNT_MAX,
+  NEW_DAYS_DEFAULT,
+  NEW_DAYS_MAX,
+  NEW_DAYS_MIN,
+  NEW_TEMPLATES,
+  parseTags,
+  previewText,
+  SALE_TEMPLATES,
+  SHAPES,
+  shapeRadius,
+  TAGS_MAX,
+  type BadgeKind,
+} from "../lib/smart-badges";
 import { useEmbedStatus } from "../lib/use-embed-status";
 import { campaignToasts, useQueryToast } from "../lib/use-toast";
 
@@ -15,6 +31,10 @@ export type WizardInitial = {
   badgeId: string;
   badgeText: string;
   badgeColor: string;
+  badgeKind: BadgeKind;
+  minDiscount: number;
+  newDays: number;
+  shape: string;
   position: string;
   size: number;
   mobilePosition: string;
@@ -32,7 +52,7 @@ export type WizardInitial = {
   endTime: string;
 };
 
-type WizardErrors = Partial<Record<"badgeText" | "badgeColor" | "position" | "size" | "targetValue" | "startAt" | "endAt" | "form", string>>;
+type WizardErrors = Partial<Record<"badgeKind" | "badgeText" | "badgeColor" | "position" | "size" | "targetValue" | "startAt" | "endAt" | "form", string>>;
 
 type WizardStep = "design" | "products" | "schedule" | "review";
 const ORDER: WizardStep[] = ["design", "products", "schedule", "review"];
@@ -40,8 +60,8 @@ const ORDER: WizardStep[] = ["design", "products", "schedule", "review"];
 // The stepper shows the three real decisions; "review" is the final
 // confirmation screen after step 3, not a step of its own.
 const STEPS: { key: Exclude<WizardStep, "review">; label: string; hint: string }[] = [
-  { key: "design", label: "Design the badge", hint: "Label, colour, position" },
-  { key: "products", label: "Choose products", hint: "All, a collection, or hand-picked" },
+  { key: "design", label: "Design the badge", hint: "Type, label, colour, position" },
+  { key: "products", label: "Choose products", hint: "All, a collection, a tag, or hand-picked" },
   { key: "schedule", label: "Set the schedule", hint: "Start now or pick dates" },
 ];
 
@@ -59,7 +79,7 @@ function formatPrice(amount: string, currency: string): string {
   }
 }
 
-function overlayStyle(pos: string, sz: number, color: string, scale = 1): React.CSSProperties {
+function overlayStyle(pos: string, sz: number, color: string, scale = 1, shape = "rounded"): React.CSSProperties {
   return {
     position: "absolute",
     ...(pos.startsWith("top") ? { top: "6%" } : {}),
@@ -69,7 +89,7 @@ function overlayStyle(pos: string, sz: number, color: string, scale = 1): React.
     ...(pos.endsWith("right") ? { right: "6%" } : {}),
     ...(pos.endsWith("center") ? { left: "50%", transform: pos.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" } : {}),
     background: color, color: badgeTextColor(color), fontWeight: 700, letterSpacing: ".02em",
-    padding: "4px 8px", borderRadius: 4, fontSize: (6 + sz / 2) * scale, whiteSpace: "nowrap",
+    padding: shape === "pill" ? "4px 11px" : "4px 8px", borderRadius: shapeRadius(shape), fontSize: (6 + sz / 2) * scale, whiteSpace: "nowrap",
   };
 }
 
@@ -100,6 +120,20 @@ const CSS = `
 .bfw-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
 .bfw-swatch { width: 30px; height: 30px; border-radius: 6px; border: 0; padding: 0; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
 .bfw-swatch[aria-pressed="true"] { outline: 2px solid #303030; outline-offset: 2px; }
+.bfw-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.bfw-kind { display: grid; gap: 4px; padding: 12px; border-radius: 10px; border: 1px solid #E3E3E3; background: #fff; cursor: pointer; font: inherit; color: inherit; text-align: left; min-width: 0; }
+.bfw-kind:hover { border-color: #B5B5B5; }
+.bfw-kind[aria-pressed="true"] { border: 2px solid #303030; padding: 11px; }
+.bfw-kind-title { font-size: 13px; font-weight: 650; display: flex; gap: 6px; align-items: center; }
+.bfw-kind-desc { font-size: 12px; color: #616161; }
+.bfw-tag { font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 999px; background: #CDFEE1; color: #0C5132; }
+.bfw-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.bfw-chip { border: 1px solid #E3E3E3; background: #fff; border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.bfw-chip[aria-pressed="true"] { border-color: #303030; background: #F1F1F1; font-weight: 600; }
+.bfw-shapes { display: flex; gap: 8px; flex-wrap: wrap; }
+.bfw-shape { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #E3E3E3; border-radius: 8px; background: #fff; cursor: pointer; font: inherit; font-size: 12px; }
+.bfw-shape[aria-pressed="true"] { border: 2px solid #303030; padding: 5px 9px; }
+.bfw-shape-mark { display: inline-block; width: 26px; height: 12px; background: #303030; }
 .bfw-posgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 8px; background: #F7F7F7; border-radius: 10px; border: 1px solid #EBEBEB; }
 .bfw-pos { position: relative; aspect-ratio: 4/3; border-radius: 6px; border: 1px solid #E3E3E3; background: #fff; cursor: pointer; padding: 0; }
 .bfw-pos[aria-pressed="true"] { border: 2px solid #303030; }
@@ -121,6 +155,7 @@ const CSS = `
   .bfw-stepper { grid-template-columns: minmax(0, 1fr); }
   .bfw-step + .bfw-step { border-left: 0; border-top: 1px solid #EBEBEB; }
   .bfw-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bfw-kinds { grid-template-columns: minmax(0, 1fr); }
   .bfw-fine, .bfw-dates { grid-template-columns: minmax(0, 1fr); }
   .bfw-hint { display: none; }
 }
@@ -133,6 +168,7 @@ export function CampaignWizard({
   previewProduct,
   embedConfirmed,
   timezone,
+  catalogStats,
   errors,
 }: {
   initial: WizardInitial;
@@ -141,6 +177,7 @@ export function CampaignWizard({
   previewProduct: PreviewProduct | null;
   embedConfirmed: boolean;
   timezone: string;
+  catalogStats: CatalogStats;
   errors: WizardErrors;
 }) {
   const submit = useSubmit();
@@ -157,6 +194,10 @@ export function CampaignWizard({
   const [selectedPresetId, setSelectedPresetId] = useState(initial.badgeId);
   const [badgeText, setBadgeText] = useState(initial.badgeText);
   const [badgeColor, setBadgeColor] = useState(initial.badgeColor);
+  const [badgeKind, setBadgeKind] = useState<BadgeKind>(initial.badgeKind);
+  const [minDiscount, setMinDiscount] = useState(initial.minDiscount);
+  const [newDays, setNewDays] = useState(initial.newDays);
+  const [shape, setShape] = useState(initial.shape);
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [position, setPosition] = useState(initial.position);
   const [size, setSize] = useState(initial.size);
@@ -170,6 +211,16 @@ export function CampaignWizard({
       : null,
   );
   const [products, setProducts] = useState(initial.pickedProducts);
+  const [tagsInput, setTagsInput] = useState(initial.targetType === "tag" ? initial.targetRef.split(",").join(", ") : "");
+  const tags = parseTags(tagsInput);
+  const tagCount = useFetcher<{ count: number | null }>();
+  const tagKey = tags.join(",");
+  useEffect(() => {
+    if (targetType !== "tag" || !tagKey) return;
+    const t = setTimeout(() => tagCount.load(`/app/tag-count?tags=${encodeURIComponent(tagKey)}`), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetType, tagKey]);
 
   const [startNow, setStartNow] = useState(initial.startNow);
   const [startDate, setStartDate] = useState(initial.startDate);
@@ -178,10 +229,43 @@ export function CampaignWizard({
   const [endDate, setEndDate] = useState(initial.endDate);
   const [endTime, setEndTime] = useState(initial.endTime);
 
-  const warning = claimWarning(selectedPresetId, badgeText);
+  // Smart sale / new badges are true by construction; fixed text may not be.
+  const warning = badgeKind === "text" ? claimWarning(selectedPresetId, badgeText) : null;
+  const rule = kindRule(badgeKind, { minDiscount, newDays });
+  const shownText = previewText(badgeKind, badgeText || "BADGE", {
+    percent: 25,
+    amount: previewProduct ? formatPrice(String(Math.max(1, Math.round(Number(previewProduct.price) * 0.25))), previewProduct.currency) : "$10",
+  });
 
+  // How many products a smart badge would show on, from the newest 250.
+  const recentNew = catalogStats.publishedAt.filter((d) => isNewProduct(d, newDays)).length;
+  const sampleNote = catalogStats.checked >= 250 ? "of your newest 250 products " : "";
+
+  function chooseKind(kind: BadgeKind) {
+    if (kind === badgeKind) return;
+    setBadgeKind(kind);
+    if (kind === "sale") {
+      setBadgeText(SALE_TEMPLATES[0]);
+      setBadgeColor("#E33C2B");
+    } else if (kind === "new") {
+      setBadgeText(NEW_TEMPLATES[0]);
+      setBadgeColor("#12795F");
+    } else {
+      const preset = BADGE_PRESETS.find((b) => b.id === selectedPresetId) ?? BADGE_PRESETS[0]!;
+      setBadgeText(preset.label);
+      setBadgeColor(preset.color);
+    }
+  }
+
+  const tagProducts = tags.length ? (tagCount.data?.count ?? null) : 0;
   const productsCount =
-    targetType === "all" ? totalProducts : targetType === "collection" ? (collection?.count ?? 0) : products.length;
+    targetType === "all"
+      ? totalProducts
+      : targetType === "collection"
+        ? (collection?.count ?? 0)
+        : targetType === "tag"
+          ? (tagProducts ?? 0)
+          : products.length;
   const targetLabel =
     targetType === "all"
       ? "All products"
@@ -189,22 +273,37 @@ export function CampaignWizard({
         ? collection
           ? `${collection.title} — ${productCount(collection.count)}`
           : "No collection chosen"
-        : `${products.length} individual product${products.length === 1 ? "" : "s"}`;
-  const targetRef = targetType === "all" ? "" : targetType === "collection" ? (collection?.id ?? "") : products.map((p) => p.id).join(",");
+        : targetType === "tag"
+          ? tags.length ? `Tagged ${tags.join(", ")}` : "No tag entered"
+          : `${products.length} individual product${products.length === 1 ? "" : "s"}`;
+  const targetRef =
+    targetType === "all"
+      ? ""
+      : targetType === "collection"
+        ? (collection?.id ?? "")
+        : targetType === "tag"
+          ? tags.join(",")
+          : products.map((p) => p.id).join(",");
 
   const limit = PLANS[plan].limit;
   const overLimit = productsCount > limit;
 
   const snapshot = JSON.stringify([
+    badgeKind, minDiscount, newDays, shape,
     campaignName, badgeText, badgeColor, position, size, mobilePosition, mobileSize, targetType, targetRef,
     startNow, startDate, startTime, hasEndDate, endDate, endTime,
   ]);
   const initialSnapshot = useMemo(
     () =>
       JSON.stringify([
+        initial.badgeKind, initial.minDiscount, initial.newDays, initial.shape,
         initial.name ?? "", initial.badgeText, initial.badgeColor, initial.position, initial.size,
         initial.mobilePosition || initial.position, initial.mobileSize || initial.size, initial.targetType,
-        initial.targetType === "all" ? "" : initial.targetType === "collection" ? initial.targetRef : initial.pickedProducts.map((p) => p.id).join(","),
+        initial.targetType === "all"
+          ? ""
+          : initial.targetType === "collection" || initial.targetType === "tag"
+            ? initial.targetRef
+            : initial.pickedProducts.map((p) => p.id).join(","),
         initial.startNow, initial.startDate, initial.startTime, initial.hasEndDate, initial.endDate, initial.endTime,
       ]),
     [initial],
@@ -220,6 +319,10 @@ export function CampaignWizard({
     fd.set("campaignName", campaignName);
     fd.set("badgeText", badgeText);
     fd.set("badgeColor", badgeColor);
+    fd.set("badgeKind", badgeKind);
+    fd.set("minDiscount", String(minDiscount));
+    fd.set("newDays", String(newDays));
+    fd.set("shape", shape);
     fd.set("position", position);
     fd.set("size", String(size));
     fd.set("mobilePosition", mobilePosition);
@@ -284,7 +387,7 @@ export function CampaignWizard({
     review: { label: startNow ? "Publish now" : "Schedule campaign", hint: "Publishing is the only step that changes your storefront." },
   };
 
-  const errorList = [errors.form, errors.badgeText, errors.badgeColor, errors.position, errors.size, errors.targetValue, errors.startAt, errors.endAt].filter(Boolean);
+  const errorList = [errors.form, errors.badgeKind, errors.badgeText, errors.badgeColor, errors.position, errors.size, errors.targetValue, errors.startAt, errors.endAt].filter(Boolean);
 
   const previewPanel = (
     <s-section>
@@ -297,6 +400,7 @@ export function CampaignWizard({
       </div>
       <s-text color="subdued" fontSize="small">
         {previewProduct ? "A product from your store, as a collection-page card." : "Add a product to your store to preview on a real card."}
+        {badgeKind === "sale" ? " Shown as if it were 25% off — each product shows its own discount." : ""}
       </s-text>
       <div className="bfw-card" style={{ maxWidth: device === "mobile" ? 170 : 280 }}>
         <div className="bfw-card-img">
@@ -307,8 +411,8 @@ export function CampaignWizard({
               <s-icon type="image" tone="neutral" />
             </div>
           )}
-          <span style={overlayStyle(currentPosition, currentSize, badgeColor, device === "mobile" ? 0.8 : 1)}>
-            {badgeText || "BADGE"}
+          <span style={overlayStyle(currentPosition, currentSize, badgeColor, device === "mobile" ? 0.8 : 1, shape)}>
+            {shownText}
           </span>
         </div>
         <div style={{ padding: "8px 10px" }}>
@@ -328,6 +432,11 @@ export function CampaignWizard({
           <s-list-item>Product pages</s-list-item>
           <s-list-item>Not in cart or checkout (Shopify doesn&apos;t allow it)</s-list-item>
         </s-unordered-list>
+        {rule && (
+          <s-box paddingBlockStart="small-200">
+            <s-text color="subdued" fontSize="small">{rule}.</s-text>
+          </s-box>
+        )}
       </s-box>
     </s-section>
   );
@@ -367,6 +476,117 @@ export function CampaignWizard({
             {step === "design" && (
               <>
                 <s-section>
+                  <s-heading>What kind of badge?</s-heading>
+                  <div className="bfw-kinds" role="group" aria-label="Badge type">
+                    {([
+                      { kind: "sale", title: "Automatic sale", desc: "Shows each product's real discount — only on products that are on sale.", tag: "Recommended" },
+                      { kind: "new", title: "Automatic new", desc: "Only on products added recently. Drops off by itself." },
+                      { kind: "text", title: "Fixed text", desc: "The same text on every product you choose." },
+                    ] as { kind: BadgeKind; title: string; desc: string; tag?: string }[]).map((k) => (
+                      <button key={k.kind} type="button" className="bfw-kind" aria-pressed={badgeKind === k.kind} onClick={() => chooseKind(k.kind)}>
+                        <span className="bfw-kind-title">
+                          {k.title}
+                          {k.tag && <span className="bfw-tag">{k.tag}</span>}
+                        </span>
+                        <span className="bfw-kind-desc">{k.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {badgeKind === "sale" && (
+                    <s-box paddingBlockStart="base">
+                      <s-stack direction="block" gap="base">
+                        <s-text color="subdued" fontSize="small">
+                          BadgeFlow reads each product&apos;s compare-at price, so a product at full price never gets a sale badge and
+                          the number is always right. If variants have different discounts, the badge shows the biggest one among
+                          variants in stock — write &quot;Up to -{"{discount}"}%&quot; if you prefer.
+                        </s-text>
+                        <div>
+                          <div className="bfw-label">Start from</div>
+                          <div className="bfw-chips">
+                            {SALE_TEMPLATES.map((t) => (
+                              <button key={t} type="button" className="bfw-chip" aria-pressed={badgeText === t} onClick={() => setBadgeText(t)}>
+                                {previewText("sale", t)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {catalogStats.checked > 0 &&
+                          (catalogStats.onSale > 0 ? (
+                            <s-text fontSize="small">
+                              ✓ {productCount(catalogStats.onSale)} {sampleNote}{catalogStats.onSale === 1 ? "is" : "are"} on sale right now.
+                            </s-text>
+                          ) : (
+                            <s-banner tone="warning" heading="No products are on sale right now">
+                              This badge only shows on products with a compare-at price above their price, so it won&apos;t appear
+                              anywhere yet. Set a compare-at price on the products you&apos;ve discounted in Shopify — the badge
+                              appears on them within a few minutes.
+                            </s-banner>
+                          ))}
+                        <s-number-field
+                          label="Only show when the discount is at least"
+                          value={String(minDiscount)}
+                          min={0}
+                          max={MIN_DISCOUNT_MAX}
+                          step={1}
+                          suffix="%"
+                          details="0 shows it on every discounted product. Try 10 to skip tiny markdowns."
+                          onChange={(e: CallbackEvent<"s-number-field">) => {
+                            const n = Math.round(Number(e.currentTarget.value));
+                            if (Number.isFinite(n)) setMinDiscount(Math.min(MIN_DISCOUNT_MAX, Math.max(0, n)));
+                          }}
+                        />
+                      </s-stack>
+                    </s-box>
+                  )}
+
+                  {badgeKind === "new" && (
+                    <s-box paddingBlockStart="base">
+                      <s-stack direction="block" gap="base">
+                        <s-text color="subdued" fontSize="small">
+                          Uses the date each product was published to your online store. Products stop showing the badge on their own
+                          once they&apos;re older than this.
+                        </s-text>
+                        <div>
+                          <div className="bfw-label">Start from</div>
+                          <div className="bfw-chips">
+                            {NEW_TEMPLATES.map((t) => (
+                              <button key={t} type="button" className="bfw-chip" aria-pressed={badgeText === t} onClick={() => setBadgeText(t)}>
+                                {t}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {catalogStats.checked > 0 &&
+                          (recentNew > 0 ? (
+                            <s-text fontSize="small">
+                              ✓ {productCount(recentNew)} {recentNew === 1 ? "was" : "were"} published in the last {newDays} day{newDays === 1 ? "" : "s"}.
+                            </s-text>
+                          ) : (
+                            <s-banner tone="warning" heading={`No products were published in the last ${newDays} days`}>
+                              The badge won&apos;t show anywhere until you publish a new product — or count more days as new.
+                            </s-banner>
+                          ))}
+                        <s-number-field
+                          label="Counts as new for"
+                          value={String(newDays)}
+                          min={NEW_DAYS_MIN}
+                          max={NEW_DAYS_MAX}
+                          step={1}
+                          suffix="days"
+                          details={`After publishing. ${NEW_DAYS_DEFAULT} days is a good default.`}
+                          onChange={(e: CallbackEvent<"s-number-field">) => {
+                            const n = Math.round(Number(e.currentTarget.value));
+                            if (Number.isFinite(n)) setNewDays(Math.min(NEW_DAYS_MAX, Math.max(NEW_DAYS_MIN, n)));
+                          }}
+                        />
+                      </s-stack>
+                    </s-box>
+                  )}
+                </s-section>
+
+                {badgeKind === "text" && (
+                <s-section>
                   <s-heading>Start from a badge</s-heading>
                   <s-text color="subdued" fontSize="small">Pick one and edit it — or write your own below.</s-text>
                   <div className="bfw-presets">
@@ -390,10 +610,16 @@ export function CampaignWizard({
                   </div>
                   {warning && (
                     <s-box paddingBlockStart="base">
-                      <s-banner tone="warning">{warning}</s-banner>
+                      <s-banner tone="warning">
+                        {warning}{" "}
+                        {/SALE|%|OFF\b|CLEARANCE/i.test(badgeText) && (
+                          <s-button variant="tertiary" onClick={() => chooseKind("sale")}>Use an automatic sale badge</s-button>
+                        )}
+                      </s-banner>
                     </s-box>
                   )}
                 </s-section>
+                )}
 
                 <s-section>
                   <s-heading>Fine-tune it</s-heading>
@@ -406,14 +632,42 @@ export function CampaignWizard({
                         onChange={(e: CallbackEvent<"s-text-field">) => setBadgeText(e.currentTarget.value)}
                         maxLength={BADGE_TEXT_MAX}
                         error={errors.badgeText}
-                        details={`${badgeText.length} of ${BADGE_TEXT_MAX} characters — short badges read better on phones.`}
+                        details={
+                          badgeKind === "sale"
+                            ? `Use {discount} for the percentage and {amount} for the saving. ${badgeText.length} of ${BADGE_TEXT_MAX} characters.`
+                            : `${badgeText.length} of ${BADGE_TEXT_MAX} characters — short badges read better on phones.`
+                        }
                       />
                       <div>
                         <div className="bfw-label">Colour</div>
                         <div className="bfw-swatches">
-                          {[...COLORS, ...(COLORS.includes(badgeColor) ? [] : [badgeColor])].map((c) => (
+                          {COLORS.map((c) => (
                             <button key={c} type="button" className="bfw-swatch" style={{ background: c }}
-                              aria-label={`Colour ${c}`} aria-pressed={badgeColor === c} onClick={() => setBadgeColor(c)} />
+                              aria-label={`Colour ${c}`} aria-pressed={badgeColor.toUpperCase() === c} onClick={() => setBadgeColor(c)} />
+                          ))}
+                        </div>
+                        <s-box paddingBlockStart="small-200">
+                          <s-color-field
+                            label="Custom colour"
+                            labelAccessibilityVisibility="exclusive"
+                            placeholder="#E33C2B"
+                            value={badgeColor}
+                            error={errors.badgeColor}
+                            onChange={(e: CallbackEvent<"s-color-field">) => {
+                              const v = e.currentTarget.value;
+                              if (/^#[0-9a-f]{6}$/i.test(v)) setBadgeColor(v.toUpperCase());
+                            }}
+                          />
+                        </s-box>
+                      </div>
+                      <div>
+                        <div className="bfw-label">Shape</div>
+                        <div className="bfw-shapes" role="group" aria-label="Badge shape">
+                          {SHAPES.map((sh) => (
+                            <button key={sh.value} type="button" className="bfw-shape" aria-pressed={shape === sh.value} onClick={() => setShape(sh.value)}>
+                              <span className="bfw-shape-mark" style={{ borderRadius: shapeRadius(sh.value), background: badgeColor }} />
+                              {sh.label}
+                            </button>
                           ))}
                         </div>
                       </div>
@@ -487,11 +741,32 @@ export function CampaignWizard({
                       A collection
                       <s-text slot="details">Products added to the collection later get the badge within a few minutes.</s-text>
                     </s-choice>
+                    <s-choice value="tag">
+                      Products with a tag
+                      <s-text slot="details">Tag products in Shopify (e.g. &quot;summer&quot;) and they get the badge — including ones you tag later.</s-text>
+                    </s-choice>
                     <s-choice value="products">
                       Hand-picked products
                       <s-text slot="details">Up to {MAX_PICKED} products.</s-text>
                     </s-choice>
                   </s-choice-list>
+
+                  {targetType === "tag" && (
+                    <s-text-field
+                      label="Product tags"
+                      value={tagsInput}
+                      placeholder="summer, new-season"
+                      onInput={(e: CallbackEvent<"s-text-field">) => setTagsInput(e.currentTarget.value)}
+                      onChange={(e: CallbackEvent<"s-text-field">) => setTagsInput(e.currentTarget.value)}
+                      details={
+                        !tags.length
+                          ? `Separate tags with commas — products with any of them get the badge. Up to ${TAGS_MAX}.`
+                          : tagCount.state !== "idle" || tagProducts === null
+                            ? "Counting tagged products…"
+                            : `${productCount(tagProducts)} with ${tags.length === 1 ? "this tag" : "any of these tags"}.`
+                      }
+                    />
+                  )}
 
                   {targetType === "collection" && (
                     <s-stack direction="inline" gap="base" alignItems="center">
@@ -526,9 +801,21 @@ export function CampaignWizard({
                       </div>
                     )}
                     {overLimit ? (
-                      <s-banner tone="warning">
-                        This targets {productsCount} products, more than your {PLANS[plan].label} plan&apos;s {limit}. The first {limit}{" "}
-                        get the badge and the rest show none. <s-link href="/app/plan">See plans</s-link>
+                      <s-banner tone="warning" heading={`Only ${limit} of these ${productsCount} products will show the badge`}>
+                        <s-paragraph>
+                          The {PLANS[plan].label} plan badges up to {limit} products at a time.{" "}
+                          {badgeKind === "sale"
+                            ? `BadgeFlow gives the ${limit} spots to products that are on sale first.`
+                            : badgeKind === "new"
+                              ? `BadgeFlow gives the ${limit} spots to your newest products first.`
+                              : targetType === "all"
+                                ? `BadgeFlow picks the first ${limit} alphabetically, so most products will show no badge — that's the plan limit, not a problem with your theme.`
+                                : `The first ${limit} get the badge and the rest show none.`}
+                        </s-paragraph>
+                        <s-paragraph>
+                          To choose exactly which products get it, target a collection or a tag with up to {limit} products — or{" "}
+                          <s-link href="/app/plan">upgrade to badge more</s-link>.
+                        </s-paragraph>
                       </s-banner>
                     ) : (
                       <s-text color="subdued" fontSize="small">Fits the {PLANS[plan].label} plan.</s-text>
@@ -604,14 +891,16 @@ export function CampaignWizard({
                 )}
                 <div className="bfw-summary">
                   {[
-                    ["Badge", <span key="b" className="bfw-pill" style={{ background: badgeColor }}>{badgeText}</span>],
+                    ["Badge", <span key="b" className="bfw-pill" style={{ background: badgeColor, color: badgeTextColor(badgeColor), borderRadius: shapeRadius(shape) }}>{shownText}</span>],
+                    ["Type", badgeKind === "sale" ? "Automatic sale" : badgeKind === "new" ? "Automatic new" : "Fixed text"],
+                    ...(rule ? [["Shows", rule]] : []),
                     ["Position", `${positionLabel(position)} · ${size}%${mobilePosition !== position || mobileSize !== size ? ` (mobile: ${positionLabel(mobilePosition)} · ${mobileSize}%)` : ""}`],
                     ["Products", targetLabel],
                     ["Starts", startNow ? "Immediately, when published" : startInstant ? formatInZone(startInstant, timezone) : "Pick a start date"],
                     ["Ends", hasEndDate ? (endInstant ? formatInZone(endInstant, timezone) : "Pick an end date") : "No end date"],
                     ["Timezone", timezone],
                     ["Theme connection", embedOn ? "App embed is on" : "App embed is off"],
-                    ["Plan check", `${productsCount} of ${limit === Infinity ? "∞" : limit} — ${PLANS[plan].label} plan${overLimit ? " (extra products show no badge)" : " ✓"}`],
+                    ["Plan check", `${productsCount} of ${limit === Infinity ? "∞" : limit} — ${PLANS[plan].label} plan${overLimit ? ` (only ${limit} get the badge)` : " ✓"}`],
                   ].map(([k, v]) => (
                     <div key={String(k)}>
                       <s-text color="subdued">{k}</s-text>

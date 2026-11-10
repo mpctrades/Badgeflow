@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { badgeTextColor } from "../lib/badges";
+import { previewText } from "../lib/smart-badges";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { PLANS, productsLabel, runningWindows, setupSteps, storefrontStatus, type PlanId } from "../lib/campaign";
@@ -40,7 +41,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           isLive: live.includes(featured),
           status: storefrontStatus(featured, windows),
           products: productsLabel(featured).toLowerCase(),
-          badgeText: featured.badgeText,
+          badgeText: previewText(featured.badgeKind, featured.badgeText),
           badgeColor: featured.badgeColor,
         }
       : null,

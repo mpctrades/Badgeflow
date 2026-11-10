@@ -147,3 +147,44 @@ export function formatPrice(amount: string, currency: string): string {
     return `${amount} ${currency}`;
   }
 }
+
+// A look at the newest products, so the campaign wizard can say how many an
+// automatic sale or "new" badge would show on — and warn before publishing a
+// badge that would show nowhere. `onSale` is a shortlist hint from price
+// ranges; the storefront checks each variant exactly.
+export type CatalogStats = { checked: number; onSale: number; publishedAt: string[] };
+
+export async function fetchCatalogStats(admin: AdminGraphqlClient): Promise<CatalogStats> {
+  return query(
+    admin,
+    "BadgeFlowCatalogStats",
+    `#graphql
+      query BadgeFlowCatalogStats {
+        products(first: 250, query: "status:active", sortKey: PUBLISHED_AT, reverse: true) {
+          nodes {
+            publishedAt
+            priceRangeV2 { minVariantPrice { amount } }
+            compareAtPriceRange { maxVariantCompareAtPrice { amount } }
+          }
+        }
+      }`,
+    undefined,
+    (data) => {
+      const nodes = (data?.products?.nodes ?? []) as {
+        publishedAt: string | null;
+        priceRangeV2?: { minVariantPrice?: { amount: string } };
+        compareAtPriceRange?: { maxVariantCompareAtPrice?: { amount: string } } | null;
+      }[];
+      return {
+        checked: nodes.length,
+        onSale: nodes.filter((n) => {
+          const price = Number(n.priceRangeV2?.minVariantPrice?.amount);
+          const compare = Number(n.compareAtPriceRange?.maxVariantCompareAtPrice?.amount);
+          return Number.isFinite(price) && Number.isFinite(compare) && compare > price;
+        }).length,
+        publishedAt: nodes.map((n) => n.publishedAt).filter((d): d is string => !!d),
+      };
+    },
+    { checked: 0, onSale: 0, publishedAt: [] } as CatalogStats,
+  );
+}

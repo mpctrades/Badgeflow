@@ -9,6 +9,7 @@ import { badgedProductCount, syncStorefrontIfStale } from "../lib/storefront-syn
 import { formatDateInZone } from "../lib/timezone";
 import { useToast } from "../components/toast";
 import { pricingAdminLink, refreshPlan } from "../lib/billing.server";
+import { parseTags, tagSearchQuery } from "../lib/smart-badges";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -40,6 +41,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     liveCampaigns.map(async (c) => {
       if (c.targetType === "all") return totalProducts;
       if (c.targetType === "products") return c.targetRef.split(",").filter(Boolean).length;
+      if (c.targetType === "tag") {
+        const tags = parseTags(c.targetRef);
+        if (!tags.length) return 0;
+        try {
+          const res = await admin.graphql(
+            `#graphql
+              query BadgeFlowTagCount($query: String!) { productsCount(query: $query, limit: null) { count } }`,
+            { variables: { query: tagSearchQuery(tags) } },
+          );
+          return (await res.json())?.data?.productsCount?.count ?? 0;
+        } catch (error) {
+          if (error instanceof Response) throw error;
+          return 0;
+        }
+      }
       if (c.targetType !== "collection" || !c.targetRef) return 0;
       try {
         const res = await admin.graphql(

@@ -1,6 +1,7 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Link, useLoaderData } from "react-router";
 import { badgeTextColor } from "../lib/badges";
+import { kindLabel, previewText, shapeRadius } from "../lib/smart-badges";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
@@ -123,8 +124,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
     preview: {
       badge: previewCampaign
-        ? { text: previewCampaign.badgeText, color: previewCampaign.badgeColor, position: previewCampaign.position, size: previewCampaign.size }
-        : { text: "SALE -20%", color: "#E33C2B", position: "top-left", size: 12 },
+        ? {
+            text: previewText(previewCampaign.badgeKind, previewCampaign.badgeText),
+            color: previewCampaign.badgeColor,
+            position: previewCampaign.position,
+            size: previewCampaign.size,
+            shape: previewCampaign.shape,
+          }
+        : { text: "-20%", color: "#E33C2B", position: "top-left", size: 12, shape: "rounded" },
       caption: previewMissing
         ? `${previewCampaign!.badgeLabel} isn't reaching your storefront yet.`
         : firstLive
@@ -148,8 +155,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     recent: recent.map((c) => ({
       id: c.id,
       name: c.badgeLabel,
-      badgeText: c.badgeText,
+      badgeText: previewText(c.badgeKind, c.badgeText),
       badgeColor: c.badgeColor,
+      radius: shapeRadius(c.shape),
+      kind: kindLabel(c.badgeKind),
       status: c.computedStatus,
       products: productsLabel(c),
       schedule: c.isDraft ? "Draft" : scheduleLabel(c),
@@ -188,7 +197,7 @@ const CSS = `
 }
 `;
 
-function badgeOverlayStyle(badge: { color: string; position: string; size: number }): React.CSSProperties {
+function badgeOverlayStyle(badge: { color: string; position: string; size: number; shape?: string }): React.CSSProperties {
   const { position } = badge;
   return {
     position: "absolute",
@@ -201,7 +210,7 @@ function badgeOverlayStyle(badge: { color: string; position: string; size: numbe
       ? { left: "50%", transform: position.includes("middle") ? "translate(-50%,-50%)" : "translateX(-50%)" }
       : {}),
     background: badge.color, color: badgeTextColor(badge.color), fontWeight: 700,
-    padding: "3px 7px", borderRadius: 4, fontSize: 7 + badge.size / 3, whiteSpace: "nowrap",
+    padding: "3px 7px", borderRadius: shapeRadius(badge.shape), fontSize: 7 + badge.size / 3, whiteSpace: "nowrap",
   };
 }
 
@@ -343,8 +352,8 @@ export default function Index() {
                       <s-table-row key={c.id}>
                         <s-table-cell>
                           <Link to={`/app/campaigns/${c.id}/edit`} style={{ display: "flex", alignItems: "center", gap: 10, color: "inherit", textDecoration: "none" }}>
-                            <span className="bf-pill" style={{ background: c.badgeColor }}>{c.badgeText}</span>
-                            <span>{c.name}</span>
+                            <span className="bf-pill" style={{ background: c.badgeColor, borderRadius: c.radius }}>{c.badgeText}</span>
+                            <span>{c.name}{c.kind ? <s-text color="subdued" fontSize="small"> · {c.kind}</s-text> : null}</span>
                           </Link>
                         </s-table-cell>
                         <s-table-cell>{c.products}</s-table-cell>
