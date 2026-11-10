@@ -3,6 +3,8 @@
 // falls back to an empty result (and logs) when the Admin API fails or
 // throttles, so a hiccup degrades a preview instead of breaking the page.
 
+import { bestDiscount, qualifiesForSale } from "./smart-badges";
+
 type AdminGraphqlClient = { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
 
 async function query<T>(
@@ -106,6 +108,55 @@ export async function fetchPreviewProducts(admin: AdminGraphqlClient, first = 3,
     { first, query: search },
     (data) => ((data?.products?.nodes ?? []) as ProductNode[]).map(toPreview),
     [] as PreviewProduct[],
+  );
+}
+
+export type SalePreviewProduct = PreviewProduct & { percent: number; savingCents: number };
+
+type SaleNode = ProductNode & {
+  variants?: { nodes?: { price: string; compareAtPrice: string | null; availableForSale?: boolean }[] };
+};
+
+// Sale campaigns: the first products (of `handles`, or the whole store) that
+// really carry a sale badge, with the discount the storefront will show —
+// same rule as badgeflow.js (bestDiscount + qualifiesForSale).
+export async function fetchSalePreviewProducts(
+  admin: AdminGraphqlClient,
+  minDiscount: number,
+  first = 3,
+  handles?: string[],
+): Promise<SalePreviewProduct[]> {
+  if (handles && !handles.length) return [];
+  const search = handles ? handles.slice(0, 50).map((h) => `handle:${JSON.stringify(h)}`).join(" OR ") : null;
+  return query(
+    admin,
+    "BadgeFlowSalePreviewProducts",
+    `#graphql
+      query BadgeFlowSalePreviewProducts($query: String) {
+        products(first: 50, sortKey: TITLE, query: $query) {
+          nodes {
+            ${PREVIEW_FIELDS}
+            variants(first: 50) { nodes { price compareAtPrice availableForSale } }
+          }
+        }
+      }`,
+    { query: search },
+    (data) => {
+      const out: SalePreviewProduct[] = [];
+      for (const n of (data?.products?.nodes ?? []) as SaleNode[]) {
+        const variants = (n.variants?.nodes ?? []).map((v) => ({
+          price: Math.round(Number(v.price) * 100),
+          compareAt: v.compareAtPrice == null ? null : Math.round(Number(v.compareAtPrice) * 100),
+          available: v.availableForSale,
+        }));
+        const discount = bestDiscount(variants);
+        if (!qualifiesForSale(discount, minDiscount)) continue;
+        out.push({ ...toPreview(n), percent: discount.percent, savingCents: discount.savingCents });
+        if (out.length >= first) break;
+      }
+      return out;
+    },
+    [] as SalePreviewProduct[],
   );
 }
 

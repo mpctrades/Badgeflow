@@ -3,11 +3,11 @@ import { useActionData, useLoaderData, useNavigation, useSubmit } from "react-ro
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { badgeTextColor, positionLabel } from "../lib/badges";
-import { kindRule, previewText, shapeRadius } from "../lib/smart-badges";
+import { kindRule, previewText, renderTemplate, shapeRadius } from "../lib/smart-badges";
 import {
   blockingCampaign, PLANS, runningWindows, statusLabel, statusTone, storefrontStatus, type PlanId,
 } from "../lib/campaign";
-import { fetchPreviewProducts, fetchShopInfo, formatPrice } from "../lib/shopify-catalog.server";
+import { fetchPreviewProducts, fetchSalePreviewProducts, fetchShopInfo, formatPrice } from "../lib/shopify-catalog.server";
 import { syncStorefront, syncStorefrontIfStale } from "../lib/storefront-sync.server";
 import { formatInZone } from "../lib/timezone";
 import { campaignToasts, useActionToast, useQueryToast } from "../lib/use-toast";
@@ -38,9 +38,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Only the products this campaign really badges (after plan limits).
   const published = sync.config?.campaigns.find((c) => c.id === campaign.id);
-  const products = published
-    ? await fetchPreviewProducts(admin, 3, published.all ? undefined : published.handles)
-    : [];
+  // Sale badges preview the products that really show one, each with its
+  // own discount, instead of an example "-25%" on full-price products.
+  const isSale = campaign.badgeKind === "sale";
+  const handles = published && !published.all ? published.handles : undefined;
+  const products: { id: string; title: string; imageUrl: string | null; price: string; currency: string; badge?: string }[] =
+    !published
+      ? []
+      : isSale
+        ? (await fetchSalePreviewProducts(admin, campaign.minDiscount, 3, handles)).map((p) => ({
+            ...p,
+            badge: renderTemplate(campaign.badgeText, {
+              percent: p.percent,
+              amount: formatPrice((p.savingCents / 100).toFixed(2), p.currency),
+            }),
+          }))
+        : await fetchPreviewProducts(admin, 3, handles);
 
   const tz = shopInfo.ianaTimezone;
   const runsFrom = window?.startAt ?? campaign.startAt;
@@ -52,7 +65,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       badgeColor: campaign.badgeColor,
       radius: shapeRadius(campaign.shape),
       rule: kindRule(campaign.badgeKind, { minDiscount: campaign.minDiscount, newDays: campaign.newDays }),
-      exampleNote: campaign.badgeKind === "sale" ? "Shown as if 25% off — each product shows its own discount." : null,
+      exampleNote: isSale ? "Each product shows its own discount." : null,
       position: campaign.position,
       size: campaign.size,
       mobile:
@@ -74,8 +87,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // itself failed, or none of its products made it in.
     notShown: !published && (status === "live" || status === "scheduled") ? (sync.ok ? "products" : "sync") : null,
     // "All products" on a plan with a product limit: only some get the badge.
+    // Limited plans always publish a handle list, so only call it trimmed
+    // when that list actually reached the limit (a 15-product store on Free
+    // badges everything and shouldn't see a "plan limit" banner).
     trimmed:
-      published && !published.all && campaign.targetType === "all" && PLANS[plan].limit !== Infinity
+      published &&
+      !published.all &&
+      campaign.targetType === "all" &&
+      PLANS[plan].limit !== Infinity &&
+      published.handles.length >= PLANS[plan].limit
         ? {
             count: published.handles.length,
             limit: PLANS[plan].limit,
@@ -91,7 +111,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     timezone: tz,
     shopName: shopInfo.name,
     embedConfirmed: !!settings.embedConfirmedAt,
-    products: products.map((p) => ({ id: p.id, title: p.title, imageUrl: p.imageUrl, price: formatPrice(p.price, p.currency) })),
+    isSale,
+    products: products.map((p) => ({
+      id: p.id,
+      title: p.title,
+      imageUrl: p.imageUrl,
+      price: formatPrice(p.price, p.currency),
+      badge: p.badge ?? null,
+    })),
   };
 };
 
@@ -136,7 +163,7 @@ function badgeStyle(position: string, size: number, color: string, radius = "4px
 }
 
 export default function StorefrontPreview() {
-  const { campaign, status, schedule, queued, notShown, trimmed, timezone, shopName, embedConfirmed, products } =
+  const { campaign, status, schedule, queued, notShown, trimmed, timezone, shopName, embedConfirmed, products, isSale } =
     useLoaderData<typeof loader>();
   const embedOn = useEmbedStatus(embedConfirmed).active;
   useQueryToast(campaignToasts(embedOn));
@@ -238,7 +265,9 @@ export default function StorefrontPreview() {
         <s-section heading={`How it looks at ${shopName}`}>
           {products.length === 0 ? (
             <s-paragraph color="subdued">
-              No products to preview — this campaign isn&apos;t badging any products right now.
+              {isSale
+                ? "None of this campaign's products are on sale right now, so no badge shows. Add a compare-at price above the price to a product and its badge appears."
+                : "No products to preview — this campaign isn't badging any products right now."}
             </s-paragraph>
           ) : (
             <s-grid gridTemplateColumns="repeat(auto-fill, minmax(160px, 1fr))" gap="base">
@@ -252,7 +281,7 @@ export default function StorefrontPreview() {
                         <s-icon type="image" tone="neutral" />
                       </div>
                     )}
-                    <span style={badgeStyle(campaign.position, campaign.size, campaign.badgeColor, campaign.radius)}>{campaign.badgeText}</span>
+                    <span style={badgeStyle(campaign.position, campaign.size, campaign.badgeColor, campaign.radius)}>{p.badge ?? campaign.badgeText}</span>
                   </div>
                   <s-box padding="small-200">
                     <s-stack direction="block" gap="small-500">
