@@ -6,7 +6,7 @@
 //    discount ("-{discount}%") or saving ("Save {amount}").
 //  - "new":  shown only on products published in the last N days.
 //
-// The storefront script (extensions/badgeflow-badges/assets/badgeflow.js)
+// The storefront script (storefront/badgeflow.js, minified into extensions/badgeflow-badges/assets/)
 // repeats bestDiscount(), isNewProduct() and renderTemplate() in plain ES5 —
 // keep the two in step (both are covered by tests).
 //
@@ -114,6 +114,14 @@ export function renderTemplate(text: string, values: { percent: number; amount: 
 }
 
 // What admin previews show for a badge: smart sale text with example values.
+// Name used when the merchant leaves "Campaign name" blank. Sale badge text
+// holds {discount}/{amount} placeholders, which read badly in a list.
+export function defaultCampaignName(target: string, kind: string, text: string, newDays: number): string {
+  if (kind === "sale") return `${target} — automatic sale`;
+  if (kind === "new") return `${target} — ${text || "NEW"} (new for ${newDays} days)`;
+  return `${target} — ${text || "badge"}`;
+}
+
 export function previewText(kind: string, text: string, sample: { percent: number; amount: string } = { percent: 25, amount: "$10" }): string {
   return kind === "sale" ? renderTemplate(text, sample) : text;
 }

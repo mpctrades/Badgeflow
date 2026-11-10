@@ -7,6 +7,7 @@ import { PLANS, productCount, type PlanId } from "../lib/campaign";
 import { formatInZone, TIME_OPTIONS, zonedToUtc } from "../lib/timezone";
 import type { CatalogStats, PreviewProduct } from "../lib/shopify-catalog.server";
 import {
+  defaultCampaignName,
   isNewProduct,
   kindRule,
   MIN_DISCOUNT_MAX,
@@ -384,7 +385,15 @@ export function CampaignWizard({
     design: { label: "Next: choose products", hint: "You can still change everything in step 2 and 3." },
     products: { label: "Next: set the schedule", hint: `${productsCount} product${productsCount === 1 ? "" : "s"} selected.` },
     schedule: { label: "Next: review", hint: `Times are in ${timezone}.` },
-    review: { label: startNow ? "Publish now" : "Schedule campaign", hint: "Publishing is the only step that changes your storefront." },
+    review: {
+      // Editing a campaign that has already started saves it in place.
+      label: startNow
+        ? "Publish now"
+        : initial.editingId && startInstant && startInstant.getTime() <= Date.now()
+          ? "Save changes"
+          : "Schedule campaign",
+      hint: "Publishing is the only step that changes your storefront.",
+    },
   };
 
   const errorList = [errors.form, errors.badgeKind, errors.badgeText, errors.badgeColor, errors.position, errors.size, errors.targetValue, errors.startAt, errors.endAt].filter(Boolean);
@@ -689,7 +698,7 @@ export function CampaignWizard({
                         label="Campaign name"
                         value={campaignName}
                         onChange={(e: CallbackEvent<"s-text-field">) => setCampaignName(e.currentTarget.value)}
-                        placeholder={`${targetLabel} — ${badgeText || "badge"}`}
+                        placeholder={defaultCampaignName(targetLabel, badgeKind, badgeText, newDays)}
                         details="Only you see this. Leave blank to use a generated name."
                         maxLength={60}
                       />

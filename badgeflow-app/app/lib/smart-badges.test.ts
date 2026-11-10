@@ -168,3 +168,26 @@ test("storefront script: resolveBadge only shows smart badges where they're true
   // Fixed-text badges are unchanged, data or not.
   assert.equal(js.resolveBadge({ text: "BLACK FRIDAY" }, null, NOW)?.text, "BLACK FRIDAY");
 });
+
+// The theme extension ships a minified build of storefront/badgeflow.js.
+// Edit the source, then run `npm run build:storefront`.
+test("shipped storefront script is the minified build of storefront/badgeflow.js, under 10 KB", async () => {
+  const { buildSync } = await import("esbuild");
+  const built = buildSync({
+    entryPoints: [new URL("../../storefront/badgeflow.js", import.meta.url).pathname],
+    minify: true,
+    target: "es2018",
+    legalComments: "none",
+    write: false,
+  }).outputFiles[0].text;
+  const shipped = readFileSync(new URL("../../extensions/badgeflow-badges/assets/badgeflow.js", import.meta.url), "utf8");
+  assert.equal(shipped, built, "assets/badgeflow.js is stale: run npm run build:storefront");
+  assert.ok(Buffer.byteLength(shipped) < 10_000, `badgeflow.js is ${Buffer.byteLength(shipped)} bytes; theme guideline is 10 KB`);
+});
+
+test("generated campaign names never show {discount} placeholders", async () => {
+  const { defaultCampaignName } = await import("./smart-badges.ts");
+  assert.equal(defaultCampaignName("All products", "sale", "-{discount}%", 14), "All products — automatic sale");
+  assert.equal(defaultCampaignName("Summer", "new", "NEW", 30), "Summer — NEW (new for 30 days)");
+  assert.equal(defaultCampaignName("All products", "text", "FREE SHIP", 14), "All products — FREE SHIP");
+});

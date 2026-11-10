@@ -85,7 +85,7 @@ export const TARGET_TYPES = [
 ] as const;
 
 // Text colour for a badge background. Must match textColor() in the
-// storefront script (extensions/badgeflow-badges/assets/badgeflow.js) so
+// storefront script (storefront/badgeflow.js, minified into extensions/badgeflow-badges/assets/) so
 // admin previews look like the real badge.
 export function badgeTextColor(hex: string): string {
   let h = String(hex || "").replace("#", "");

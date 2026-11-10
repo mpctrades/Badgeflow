@@ -19,7 +19,8 @@ module.exports = {
     commonjs: true,
     es6: true,
   },
-  ignorePatterns: ["!**/.server", "!**/.client"],
+  // assets/badgeflow.js is the minified build of storefront/badgeflow.js.
+  ignorePatterns: ["!**/.server", "!**/.client", "extensions/badgeflow-badges/assets/badgeflow.js"],
 
   // Base config
   extends: ["eslint:recommended"],

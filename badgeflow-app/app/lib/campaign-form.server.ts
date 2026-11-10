@@ -8,6 +8,7 @@ import { POSITIONS } from "./badges";
 import { computeStatus, PLANS, runningWindows, type PlanId } from "./campaign";
 import { zonedToUtc } from "./timezone";
 import {
+  defaultCampaignName,
   isBadgeKind,
   isShape,
   MIN_DISCOUNT_MAX,
@@ -158,7 +159,7 @@ export async function saveCampaign({
 
   const isDraft = intent === "draft";
   const data = {
-    badgeLabel: campaignName || `${targetValue} — ${badgeText}`,
+    badgeLabel: campaignName || defaultCampaignName(targetValue, badgeKind, badgeText, newDays ?? NEW_DAYS_DEFAULT),
     badgeText,
     badgeColor,
     badgeKind,
