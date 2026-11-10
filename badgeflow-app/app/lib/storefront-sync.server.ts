@@ -5,6 +5,7 @@
 // starts and ends on time even if nothing is re-synced.
 import db from "../db.server";
 import { PLANS, runningWindows, type PlanId } from "./campaign";
+import { parseTags, prioritize, tagSearchQuery, type CandidateProduct } from "./smart-badges";
 
 type AdminGraphqlClient = { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
 
@@ -26,6 +27,12 @@ export type StorefrontCampaign = {
   createdAt: string;
   all: boolean;
   handles: string[];
+  // Smart badges (added later; absent = a fixed-text badge with 4px corners,
+  // so configs written before them keep rendering the same).
+  kind?: "sale" | "new";
+  minDiscount?: number;
+  newDays?: number;
+  shape?: "pill" | "square";
 };
 
 export type StorefrontConfig = {
@@ -44,62 +51,111 @@ async function json(response: Response) {
   return body;
 }
 
-async function collectionHandles(admin: AdminGraphqlClient, collectionId: string, cap: number): Promise<string[]> {
-  const handles: string[] = [];
+// Fields that let a limited plan give its slots to the right products: the
+// discounted ones for a sale badge, the newest for a "new" badge.
+const CANDIDATE_FIELDS = `
+  handle
+  publishedAt
+  priceRangeV2 { minVariantPrice { amount } }
+  compareAtPriceRange { maxVariantCompareAtPrice { amount } }
+`;
+
+type CandidateNode = {
+  handle: string;
+  publishedAt?: string | null;
+  priceRangeV2?: { minVariantPrice?: { amount: string } };
+  compareAtPriceRange?: { maxVariantCompareAtPrice?: { amount: string } } | null;
+};
+
+function toCandidate(n: CandidateNode): CandidateProduct {
+  const price = Number(n.priceRangeV2?.minVariantPrice?.amount);
+  const compare = Number(n.compareAtPriceRange?.maxVariantCompareAtPrice?.amount);
+  return {
+    handle: n.handle.toLowerCase(),
+    // A shortlist hint only — the storefront checks each variant exactly.
+    onSale: Number.isFinite(price) && Number.isFinite(compare) && compare > price,
+    publishedAt: n.publishedAt ?? null,
+  };
+}
+
+async function collectionProducts(admin: AdminGraphqlClient, collectionId: string, cap: number): Promise<CandidateProduct[]> {
+  const out: CandidateProduct[] = [];
   let after: string | null = null;
-  while (handles.length < cap) {
+  while (out.length < cap) {
     const body = await json(
       await admin.graphql(
         `#graphql
           query BadgeFlowCollectionHandles($id: ID!, $first: Int!, $after: String) {
             collection(id: $id) {
-              products(first: $first, after: $after) { nodes { handle } pageInfo { hasNextPage endCursor } }
+              products(first: $first, after: $after) { nodes { ${CANDIDATE_FIELDS} } pageInfo { hasNextPage endCursor } }
             }
           }`,
-        { variables: { id: collectionId, first: Math.min(PAGE_SIZE, cap - handles.length), after } },
+        { variables: { id: collectionId, first: Math.min(PAGE_SIZE, cap - out.length), after } },
       ),
     );
     const products = body?.data?.collection?.products;
     if (!products) break;
-    handles.push(...(products.nodes as { handle: string }[]).map((n) => n.handle.toLowerCase()));
+    out.push(...(products.nodes as CandidateNode[]).map(toCandidate));
     if (!products.pageInfo?.hasNextPage) break;
     after = products.pageInfo.endCursor;
   }
-  return handles;
+  return out;
 }
 
-async function firstProductHandles(admin: AdminGraphqlClient, count: number): Promise<string[]> {
-  const body = await json(
-    await admin.graphql(
-      `#graphql
-        query BadgeFlowAllHandles($first: Int!) {
-          products(first: $first, sortKey: TITLE, query: "status:active") { nodes { handle } }
-        }`,
-      { variables: { first: Math.max(1, Math.min(PAGE_SIZE, count)) } },
-    ),
-  );
-  return ((body?.data?.products?.nodes ?? []) as { handle: string }[]).map((n) => n.handle.toLowerCase());
+// Active products matching a search (all products, or products with a tag),
+// in the given order.
+async function searchProducts(
+  admin: AdminGraphqlClient,
+  search: string,
+  cap: number,
+  sortKey: "TITLE" | "PUBLISHED_AT" = "TITLE",
+  reverse = false,
+): Promise<CandidateProduct[]> {
+  const out: CandidateProduct[] = [];
+  let after: string | null = null;
+  while (out.length < cap) {
+    const body = await json(
+      await admin.graphql(
+        `#graphql
+          query BadgeFlowProductSearch($first: Int!, $after: String, $query: String!, $sortKey: ProductSortKeys!, $reverse: Boolean!) {
+            products(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
+              nodes { ${CANDIDATE_FIELDS} }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+        { variables: { first: Math.max(1, Math.min(PAGE_SIZE, cap - out.length)), after, query: search, sortKey, reverse } },
+      ),
+    );
+    const products = body?.data?.products;
+    if (!products) break;
+    out.push(...(products.nodes as CandidateNode[]).map(toCandidate));
+    if (!products.pageInfo?.hasNextPage) break;
+    after = products.pageInfo.endCursor;
+  }
+  return out;
 }
 
 // Hand-picked targets are product GIDs from the resource picker (older
 // campaigns stored handles directly — both are accepted).
-async function pickedHandles(admin: AdminGraphqlClient, targetRef: string): Promise<string[]> {
+async function pickedProducts(admin: AdminGraphqlClient, targetRef: string): Promise<CandidateProduct[]> {
   const entries = targetRef.split(",").map((h) => h.trim()).filter(Boolean);
   const ids = entries.filter((e) => e.startsWith("gid://"));
-  const handles = entries.filter((e) => !e.startsWith("gid://")).map((h) => h.toLowerCase());
+  const out: CandidateProduct[] = entries
+    .filter((e) => !e.startsWith("gid://"))
+    .map((h) => ({ handle: h.toLowerCase(), onSale: false, publishedAt: null }));
   for (let i = 0; i < ids.length; i += PAGE_SIZE) {
     const body = await json(
       await admin.graphql(
         `#graphql
-          query BadgeFlowPickedHandles($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { handle } } }`,
+          query BadgeFlowPickedHandles($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { ${CANDIDATE_FIELDS} } } }`,
         { variables: { ids: ids.slice(i, i + PAGE_SIZE) } },
       ),
     );
-    for (const node of (body?.data?.nodes ?? []) as ({ handle?: string } | null)[]) {
-      if (node?.handle) handles.push(node.handle.toLowerCase());
+    for (const node of (body?.data?.nodes ?? []) as (CandidateNode | null)[]) {
+      if (node?.handle) out.push(toCandidate(node));
     }
   }
-  return handles;
+  return out;
 }
 
 export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: string): Promise<StorefrontConfig> {
@@ -125,17 +181,30 @@ export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: str
 
   const published: StorefrontCampaign[] = [];
   for (const c of running) {
-    const room = plan.limit === Infinity ? MAX_HANDLES_PER_CAMPAIGN : Math.min(MAX_HANDLES_PER_CAMPAIGN, plan.limit);
+    const limited = plan.limit !== Infinity;
+    const kind = c.badgeKind === "sale" || c.badgeKind === "new" ? c.badgeKind : null;
+    // A fixed-text badge on a limited plan only needs as many products as
+    // the plan allows. A smart badge looks further, so the limited slots go
+    // to products it will really show on (on sale / new) rather than the
+    // first ones alphabetically.
+    const room = limited && !kind ? Math.min(MAX_HANDLES_PER_CAMPAIGN, plan.limit) : MAX_HANDLES_PER_CAMPAIGN;
     let all = c.targetType === "all";
-    let handles: string[] = [];
+    let candidates: CandidateProduct[] = [];
     if (c.targetType === "products") {
-      handles = await pickedHandles(admin, c.targetRef);
+      candidates = await pickedProducts(admin, c.targetRef);
     } else if (c.targetType === "collection" && c.targetRef) {
-      handles = await collectionHandles(admin, c.targetRef, room);
-    } else if (all && plan.limit !== Infinity) {
-      handles = await firstProductHandles(admin, plan.limit);
+      candidates = await collectionProducts(admin, c.targetRef, room);
+    } else if (c.targetType === "tag") {
+      const tags = parseTags(c.targetRef);
+      if (tags.length) candidates = await searchProducts(admin, tagSearchQuery(tags), room);
+    } else if (all && limited) {
+      candidates =
+        kind === "new"
+          ? await searchProducts(admin, "status:active", plan.limit, "PUBLISHED_AT", true)
+          : await searchProducts(admin, "status:active", kind === "sale" ? room : plan.limit);
       all = false;
     }
+    let handles = limited && kind ? prioritize(candidates, kind, Date.now(), c.newDays) : candidates.map((p) => p.handle);
     const w = windows.get(c.id)!;
     const span = { startAt: w.startAt.getTime(), endAt: w.endAt ? w.endAt.getTime() : Infinity };
     if (plan.limit !== Infinity) {
@@ -163,6 +232,9 @@ export async function buildStorefrontConfig(admin: AdminGraphqlClient, shop: str
       createdAt: c.createdAt.toISOString(),
       all,
       handles: handles.slice(0, MAX_HANDLES_PER_CAMPAIGN),
+      ...(kind === "sale" ? { kind, minDiscount: Math.max(0, c.minDiscount) } : {}),
+      ...(kind === "new" ? { kind, newDays: c.newDays } : {}),
+      ...(c.shape === "pill" || c.shape === "square" ? { shape: c.shape } : {}),
     });
   }
 

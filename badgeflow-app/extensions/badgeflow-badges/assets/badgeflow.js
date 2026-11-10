@@ -26,17 +26,148 @@
     }
   }
 
+  /* ---- Smart badge rules. Keep in step with app/lib/smart-badges.ts. ---- */
+
+  // Biggest discount among the variants a shopper can buy (all variants when
+  // none are in stock). Cents in, whole percent rounded DOWN out, so a badge
+  // never overstates the discount.
+  function bestDiscount(variants) {
+    var list = variants || [];
+    var buyable = list.filter(function (v) { return v.available !== false; });
+    if (!buyable.length) buyable = list;
+    var best = null;
+    for (var i = 0; i < buyable.length; i++) {
+      var price = Number(buyable[i].price), compare = Number(buyable[i].compareAt);
+      if (!isFinite(price) || !isFinite(compare) || compare <= 0 || compare <= price) continue;
+      var percent = Math.floor(((compare - price) * 100) / compare);
+      var saving = compare - price;
+      if (!best || percent > best.percent || (percent === best.percent && saving > best.savingCents)) {
+        best = { percent: percent, savingCents: saving };
+      }
+    }
+    return best;
+  }
+
+  function isNewProduct(publishedAt, days, now) {
+    if (publishedAt === null || publishedAt === undefined || publishedAt === "") return false;
+    var t = typeof publishedAt === "number" ? publishedAt : Date.parse(publishedAt);
+    if (!isFinite(t) || t > now) return false;
+    return now - t <= days * 86400000;
+  }
+
+  function renderTemplate(text, percent, amount) {
+    return String(text).replace(/\{discount\}/gi, String(percent)).replace(/\{amount\}/gi, amount);
+  }
+
+  function radius(shape) {
+    return shape === "pill" ? "999px" : shape === "square" ? "0" : "4px";
+  }
+
+  // Shopify's money_format ("${{amount}}", "{{amount_with_comma_separator}} €").
+  function formatWithMoneyFormat(cents, format) {
+    var match = /\{\{\s*(\w+)\s*\}\}/.exec(format);
+    if (!match) return null;
+    function delimit(n, decimals, thousands, decimal) {
+      var fixed = (n / 100).toFixed(decimals).split(".");
+      var whole = fixed[0].replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1" + thousands);
+      return fixed[1] ? whole + decimal + fixed[1] : whole;
+    }
+    var value;
+    switch (match[1]) {
+      case "amount_no_decimals": value = delimit(cents, 0, ",", "."); break;
+      case "amount_with_comma_separator": value = delimit(cents, 2, ".", ","); break;
+      case "amount_no_decimals_with_comma_separator": value = delimit(cents, 0, ".", ","); break;
+      case "amount_with_apostrophe_separator": value = delimit(cents, 2, "'", "."); break;
+      case "amount_with_space_separator": value = delimit(cents, 2, " ", ","); break;
+      default: value = delimit(cents, 2, ",", ".");
+    }
+    return format.replace(match[0], value).replace(/<[^>]*>/g, "");
+  }
+
+  // A saving in the shopper's currency. Whole amounts drop the ".00".
+  function formatMoney(cents, currency, moneyFormat, locale) {
+    if (currency && window.Intl && Intl.NumberFormat) {
+      try {
+        var whole = cents % 100 === 0;
+        return new Intl.NumberFormat(locale || undefined, {
+          style: "currency", currency: currency,
+          minimumFractionDigits: whole ? 0 : undefined, maximumFractionDigits: whole ? 0 : undefined,
+        }).format(cents / 100);
+      } catch (e) { /* unknown currency: fall through */ }
+    }
+    if (moneyFormat) {
+      var formatted = formatWithMoneyFormat(cents, moneyFormat);
+      if (formatted) return formatted;
+    }
+    return (cents / 100).toFixed(cents % 100 === 0 ? 0 : 2);
+  }
+
+  // The badge to draw for one product, or null when a smart badge doesn't
+  // apply to it. `product` is null when its data couldn't be loaded.
+  function resolveBadge(c, product, now) {
+    if (c.kind === "sale") {
+      var d = product && bestDiscount(product.variants);
+      if (!d || d.percent < Math.max(1, c.minDiscount || 0)) return null;
+      var amount = formatMoney(d.savingCents, shopperCurrency(), context.moneyFormat, document.documentElement.lang);
+      return { campaign: c, text: renderTemplate(c.text, d.percent, amount) };
+    }
+    if (c.kind === "new") {
+      if (!product || !isNewProduct(product.publishedAt, c.newDays || 14, now)) return null;
+      return { campaign: c, text: c.text };
+    }
+    return { campaign: c, text: c.text };
+  }
+
+  function shopperCurrency() {
+    var s = window.Shopify;
+    return (s && s.currency && s.currency.active) || context.currency || null;
+  }
+
+  // Test hook (Node's vm); harmless in the browser.
+  window.__badgeflowRules = {
+    bestDiscount: bestDiscount, isNewProduct: isNewProduct, renderTemplate: renderTemplate,
+    radius: radius, formatMoney: formatMoney, formatWithMoneyFormat: formatWithMoneyFormat, resolveBadge: resolveBadge,
+  };
+
+  /* ---- Product data ---- */
+
   var config = readJson("badgeflow-config") || {};
   var context = readJson("badgeflow-context") || {};
   var rules = config.rules || {};
-  // handle -> available. Seeded from Liquid (this page's collection or search
-  // results and the current product); other cards are looked up on demand.
-  var availability = {};
+  // handle -> { available, variants?, publishedAt?, partial? }. Seeded from
+  // Liquid (this page's collection or search results and the current
+  // product); other cards are looked up on demand. `partial` entries only
+  // know availability — enough for fixed-text badges, not for smart ones.
+  var products = {};
   var seed = context.availability || {};
-  for (var key in seed) availability[String(key).toLowerCase()] = seed[key] !== false;
+  for (var key in seed) products[String(key).toLowerCase()] = { available: seed[key] !== false, partial: true };
   if (context.productHandle && context.productAvailable != null) {
-    availability[String(context.productHandle).toLowerCase()] = context.productAvailable !== false;
+    products[String(context.productHandle).toLowerCase()] = { available: context.productAvailable !== false, partial: true };
   }
+  var full = context.products || {};
+  for (var h in full) products[String(h).toLowerCase()] = fromSeed(full[h]);
+
+  // Liquid seed: { a: available, t: published (epoch seconds), v: [[price, compare_at, available], ...] }
+  // with only the discounted variants listed.
+  function fromSeed(p) {
+    return {
+      available: p.a !== false,
+      publishedAt: p.t ? p.t * 1000 : null,
+      variants: (p.v || []).map(function (v) { return { price: v[0], compareAt: v[1], available: v[2] !== false }; }),
+    };
+  }
+
+  // Shopify's /products/{handle}.js shape, in the shopper's currency.
+  function fromAjax(p) {
+    return {
+      available: p.available !== false,
+      publishedAt: p.published_at || null,
+      variants: (p.variants || []).map(function (v) {
+        return { price: v.price, compareAt: v.compare_at_price, available: v.available !== false };
+      }),
+    };
+  }
+
   var pendingLookups = {};
   var lookupCount = 0;
   var MAX_LOOKUPS = 60;
@@ -62,11 +193,35 @@
     });
   }
 
-  function campaignsFor(handle, active) {
-    var matches = active.filter(function (c) {
+  // Campaigns that target this product, before smart-badge checks.
+  function targeting(handle, active) {
+    return active.filter(function (c) {
       return c.all || (c.handles && c.handles.indexOf(handle) !== -1);
     });
-    return rules.oneBadgePerProduct === false ? matches.slice(0, 3) : matches.slice(0, 1);
+  }
+
+  // Badges to draw on one product, or null while its data is still loading.
+  // Smart badges that don't apply are skipped before "one badge per
+  // product", so a sale badge on a full-price product doesn't hide another
+  // campaign's badge.
+  function badgesFor(handle, active, availableHint) {
+    var matches = targeting(handle, active);
+    if (!matches.length) return [];
+    var smart = matches.some(function (c) { return c.kind === "sale" || c.kind === "new"; });
+    var product = null;
+    if (smart || (rules.hideSoldOut !== false && availableHint == null)) {
+      product = lookup(handle, smart);
+      if (product === undefined) return null;
+    }
+    var available = availableHint != null ? availableHint : product ? product.available : true;
+    if (rules.hideSoldOut !== false && available === false) return [];
+    var now = Date.now();
+    var badges = [];
+    for (var i = 0; i < matches.length; i++) {
+      var b = resolveBadge(matches[i], product && !product.partial ? product : null, now);
+      if (b) badges.push(b);
+    }
+    return rules.oneBadgePerProduct === false ? badges.slice(0, 3) : badges.slice(0, 1);
   }
 
   function handleFromHref(href) {
@@ -88,21 +243,25 @@
   }
 
   // Shopify's Ajax product endpoint tells us whether a card's product is in
-  // stock. Until the answer arrives the card gets no badge, so a sold-out
-  // product never flashes one; a failed lookup falls back to showing it.
-  function isAvailable(handle) {
-    if (handle in availability) return availability[handle];
+  // stock, its prices and when it was published. Until the answer arrives
+  // the card gets no badge (undefined), so a sold-out product never flashes
+  // one; a failed lookup shows fixed-text badges but no smart ones.
+  function lookup(handle, needFull) {
+    var known = products[handle];
+    if (known && (!needFull || !known.partial)) return known;
     if (!pendingLookups[handle] && lookupCount < MAX_LOOKUPS && window.fetch) {
       lookupCount++;
       pendingLookups[handle] = true;
       var root = (window.Shopify && window.Shopify.routes && window.Shopify.routes.root) || "/";
       fetch(root + "products/" + encodeURIComponent(handle) + ".js", { credentials: "same-origin" })
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (p) { availability[handle] = !p || p.available !== false; })
-        .catch(function () { availability[handle] = true; })
+        .then(function (p) { products[handle] = p ? fromAjax(p) : { available: true, partial: true, failed: true }; })
+        .catch(function () { products[handle] = { available: true, partial: true, failed: true }; })
         .then(function () { delete pendingLookups[handle]; schedule(); });
     }
-    return lookupCount >= MAX_LOOKUPS && !pendingLookups[handle] ? true : null;
+    if (pendingLookups[handle]) return undefined;
+    // Out of lookups: draw what we can without the data.
+    return known || { available: true, partial: true, failed: true };
   }
 
   function mediaContainerFor(img) {
@@ -111,15 +270,16 @@
     return el;
   }
 
-  function place(container, campaigns) {
-    if (!container || !campaigns.length) return;
+  function place(container, badges) {
+    if (!container || !badges || !badges.length) return;
     container.querySelectorAll("[" + ATTR + "-badge]").forEach(function (n) { n.remove(); });
     if (getComputedStyle(container).position === "static") container.style.position = "relative";
 
     var width = container.getBoundingClientRect().width || 300;
     var mobile = window.innerWidth <= MOBILE_MAX;
 
-    campaigns.forEach(function (c, i) {
+    badges.forEach(function (b, i) {
+      var c = b.campaign;
       var position = (mobile && c.mobilePosition) || c.position || "top-left";
       var size = (mobile && c.mobileSize) || c.size || 12;
       var font = Math.max(9, Math.min(28, (width * size) / 300));
@@ -132,14 +292,14 @@
       // can't resize or reposition the badge.
       var badge = document.createElement("badgeflow-badge");
       badge.setAttribute(ATTR + "-badge", c.id);
-      badge.textContent = c.text;
+      badge.textContent = b.text;
       var styles = {
         position: "absolute", "z-index": "3", "pointer-events": "none", display: "inline-block",
         width: "auto", height: "auto", "min-width": "0", "min-height": "0", "max-width": "90%", "max-height": "none",
         top: "auto", right: "auto", bottom: "auto", left: "auto", margin: "0", transform: "none",
         "box-sizing": "border-box", background: c.color || "#E33C2B", color: textColor(c.color),
         "font-family": "inherit", "font-weight": "700", "font-size": font + "px", "line-height": "1.2",
-        "letter-spacing": "0.02em", "text-transform": "none", padding: "0.3em 0.6em", "border-radius": "4px",
+        "letter-spacing": "0.02em", "text-transform": "none", padding: c.shape === "pill" ? "0.3em 0.8em" : "0.3em 0.6em", "border-radius": radius(c.shape),
         border: "0", "box-shadow": "none", opacity: "1", "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis",
       };
 
@@ -177,9 +337,9 @@
       if (a.closest(SKIP_AREAS)) return;
       var handle = handleFromHref(a.getAttribute("href"));
       if (!handle) return;
-      var matches = campaignsFor(handle, active);
-      if (!matches.length) return;
-      if (rules.hideSoldOut !== false && isAvailable(handle) !== true) return;
+      if (!targeting(handle, active).length) return;
+      var badges = badgesFor(handle, active, null);
+      if (!badges || !badges.length) return;
       // Walk up to the card: the nearest ancestor that contains a product
       // image, without climbing into a container shared with other products.
       var card = a, img = a.querySelector("img");
@@ -195,7 +355,7 @@
       var container = mediaContainerFor(img);
       if (!container || seen.has(container)) return;
       seen.add(container);
-      place(container, matches);
+      place(container, badges);
     });
   }
 
@@ -212,7 +372,8 @@
       var img = main.querySelector("img");
       target = img && mediaContainerFor(img);
     }
-    place(target, campaignsFor(String(context.productHandle).toLowerCase(), active));
+    var badges = badgesFor(String(context.productHandle).toLowerCase(), active, context.productAvailable);
+    if (badges) place(target, badges);
   }
 
   function run() {

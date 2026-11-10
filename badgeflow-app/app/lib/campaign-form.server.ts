@@ -7,6 +7,17 @@ import db from "../db.server";
 import { POSITIONS } from "./badges";
 import { computeStatus, PLANS, runningWindows, type PlanId } from "./campaign";
 import { zonedToUtc } from "./timezone";
+import {
+  isBadgeKind,
+  isShape,
+  MIN_DISCOUNT_MAX,
+  NEW_DAYS_DEFAULT,
+  NEW_DAYS_MAX,
+  NEW_DAYS_MIN,
+  parseTags,
+  PLACEHOLDER,
+  TAGS_MAX,
+} from "./smart-badges";
 import { fetchShopInfo } from "./shopify-catalog.server";
 import { publishOutcome, syncStorefront } from "./storefront-sync.server";
 
@@ -23,11 +34,21 @@ const PRODUCT_GID = /^gid:\/\/shopify\/Product\/\d+$/;
 const COLLECTION_GID = /^gid:\/\/shopify\/Collection\/\d+$/;
 const HANDLE = /^[a-z0-9][a-z0-9-_]*$/i;
 
-export type CampaignErrors = Partial<Record<"badgeText" | "badgeColor" | "position" | "size" | "targetValue" | "startAt" | "endAt" | "form", string>>;
+export type CampaignErrors = Partial<
+  Record<"badgeKind" | "badgeText" | "badgeColor" | "position" | "size" | "targetValue" | "startAt" | "endAt" | "form", string>
+>;
 
 function str(formData: FormData, key: string, fallback = ""): string {
   const v = formData.get(key);
   return typeof v === "string" ? v.trim() : fallback;
+}
+
+function intIn(raw: string, fallback: number, min: number, max: number): number | null {
+  if (raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  return rounded < min || rounded > max ? null : rounded;
 }
 
 function sizeOf(raw: string, fallback: number): number | null {
@@ -56,9 +77,22 @@ export async function saveCampaign({
   const errors: CampaignErrors = {};
 
   const campaignName = str(formData, "campaignName").slice(0, NAME_MAX);
+  const kindRaw = str(formData, "badgeKind", "text") || "text";
+  const badgeKind = isBadgeKind(kindRaw) ? kindRaw : "text";
+  if (!isBadgeKind(kindRaw)) errors.badgeKind = "Pick a badge type";
+  const minDiscount = badgeKind === "sale" ? intIn(str(formData, "minDiscount"), 0, 0, MIN_DISCOUNT_MAX) : 0;
+  if (minDiscount === null) errors.badgeKind = `Minimum discount must be between 0% and ${MIN_DISCOUNT_MAX}%`;
+  const newDays = badgeKind === "new" ? intIn(str(formData, "newDays"), NEW_DAYS_DEFAULT, NEW_DAYS_MIN, NEW_DAYS_MAX) : NEW_DAYS_DEFAULT;
+  if (newDays === null) errors.badgeKind = `"New" must mean between ${NEW_DAYS_MIN} and ${NEW_DAYS_MAX} days`;
+  const shapeRaw = str(formData, "shape", "rounded") || "rounded";
+  const shape = isShape(shapeRaw) ? shapeRaw : "rounded";
+
   const badgeText = str(formData, "badgeText");
   if (!badgeText) errors.badgeText = "Badge text is required";
   else if (badgeText.length > BADGE_TEXT_MAX) errors.badgeText = `Keep badge text to ${BADGE_TEXT_MAX} characters`;
+  else if (badgeKind !== "sale" && PLACEHOLDER.test(badgeText)) {
+    errors.badgeText = "{discount} and {amount} only work on an automatic sale badge";
+  }
 
   const badgeColor = str(formData, "badgeColor", "#E33C2B");
   if (!HEX.test(badgeColor)) errors.badgeColor = "Pick a colour";
@@ -88,6 +122,12 @@ export async function saveCampaign({
     else if (!picked.every((e) => PRODUCT_GID.test(e) || HANDLE.test(e))) errors.targetValue = "Choose products with the product picker";
     targetRef = picked.join(",");
     targetValue = `${picked.length} product${picked.length === 1 ? "" : "s"}`;
+  } else if (targetType === "tag") {
+    const tags = parseTags(targetRef);
+    if (!tags.length) errors.targetValue = "Enter at least one product tag";
+    else if (tags.length > TAGS_MAX) errors.targetValue = `Use up to ${TAGS_MAX} tags`;
+    targetRef = tags.join(",");
+    targetValue = `Tagged ${tags.join(", ")}`.slice(0, 120);
   } else {
     errors.targetValue = "Choose which products get the badge";
   }
@@ -121,6 +161,10 @@ export async function saveCampaign({
     badgeLabel: campaignName || `${targetValue} — ${badgeText}`,
     badgeText,
     badgeColor,
+    badgeKind,
+    minDiscount: minDiscount ?? 0,
+    newDays: newDays ?? NEW_DAYS_DEFAULT,
+    shape,
     position,
     size: size!,
     mobilePosition,

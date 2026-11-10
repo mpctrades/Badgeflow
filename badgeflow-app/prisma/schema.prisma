@@ -68,6 +68,14 @@ model Campaign {
   size          Int       @default(12)
   mobilePosition String?
   mobileSize    Int?
+  // "text" (fixed text), "sale" (only on discounted products; text may use
+  // {discount} / {amount}) or "new" (only on recently published products).
+  badgeKind     String    @default("text")
+  minDiscount   Int       @default(0)
+  newDays       Int       @default(14)
+  // "rounded" (the original 4px corners), "pill" or "square".
+  shape         String    @default("rounded")
+  // "all", "collection", "products" or "tag" (targetRef = comma-separated tags).
   targetType    String
   targetRef     String    @default("")
   targetValue   String

@@ -1,0 +1,18 @@
+{%- comment -%}
+  One product for badgeflow.js smart badges, as `"handle":{...}`:
+  a = available, t = published (epoch seconds), v = discounted variants as
+  [price, compare_at_price, available] in cents. While the product is in
+  stock only in-stock variants are listed, matching how badgeflow.js reads
+  /products/{handle}.js.
+{%- endcomment -%}
+{{- p.handle | json -}}:{"a":{{ p.available | json }},"t":{% if p.published_at %}{{ p.published_at | date: '%s' }}{% else %}null{% endif %},"v":[
+{%- assign bf_vfirst = true -%}
+{%- for v in p.variants limit: 100 -%}
+  {%- if v.compare_at_price and v.compare_at_price > v.price -%}
+    {%- if v.available or p.available == false -%}
+      {%- unless bf_vfirst -%},{%- endunless -%}[{{ v.price }},{{ v.compare_at_price }},{{ v.available | json }}]
+      {%- assign bf_vfirst = false -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+]}

@@ -10,6 +10,14 @@
   {%- assign bf_enabled = false -%}
 {%- endif -%}
 
+{%- comment -%} Smart badges (automatic sale / new) need prices and publish dates. {%- endcomment -%}
+{%- assign bf_smart = false -%}
+{%- if bf_config -%}
+  {%- for bf_c in bf_config.campaigns -%}
+    {%- if bf_c.kind == 'sale' or bf_c.kind == 'new' -%}{%- assign bf_smart = true -%}{%- break -%}{%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+
 {%- if bf_enabled or request.design_mode -%}
   <script type="application/json" id="badgeflow-config">{{ app.metafields.badgeflow.config.value | json }}</script>
   <script type="application/json" id="badgeflow-context">
@@ -18,6 +26,8 @@
       "showSample": {{ block.settings.show_sample | json }},
       "productHandle": {% if template.name == 'product' and product %}{{ product.handle | json }}{% else %}null{% endif %},
       "productAvailable": {% if template.name == 'product' and product %}{{ product.available | json }}{% else %}null{% endif %},
+      "currency": {{ cart.currency.iso_code | json }},
+      "moneyFormat": {{ shop.money_format | strip_html | json }},
       "availability": {
         {%- comment -%}
           Availability for the first products of this collection or search, so
@@ -37,6 +47,24 @@
           {%- endfor -%}
         {%- endif -%}
       }
+      {%- if bf_smart -%},
+      "products": {
+        {%- assign bf_first = true -%}
+        {%- if template.name == 'product' and product -%}
+          {%- render 'badgeflow-product-seed', p: product -%}{%- assign bf_first = false -%}
+        {%- elsif template.name == 'collection' and collection -%}
+          {%- for p in collection.products limit: 50 -%}
+            {%- unless bf_first -%},{%- endunless -%}{%- render 'badgeflow-product-seed', p: p -%}{%- assign bf_first = false -%}
+          {%- endfor -%}
+        {%- elsif template.name == 'search' and search.performed -%}
+          {%- for item in search.results limit: 50 -%}
+            {%- if item.object_type == 'product' -%}
+              {%- unless bf_first -%},{%- endunless -%}{%- render 'badgeflow-product-seed', p: item -%}{%- assign bf_first = false -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+      }
+      {%- endif %}
     }
   </script>
 {%- endif -%}

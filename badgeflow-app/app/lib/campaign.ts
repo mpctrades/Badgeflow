@@ -102,6 +102,10 @@ export function productsLabel(c: { targetType: string; targetRef: string; target
   if (c.targetType === "products") {
     return productCount(c.targetRef.split(",").map((h) => h.trim()).filter(Boolean).length);
   }
+  if (c.targetType === "tag") {
+    const tags = c.targetRef.split(",").map((t) => t.trim()).filter(Boolean);
+    return tags.length ? `Tagged ${tags.join(", ")}` : c.targetValue;
+  }
   const idx = c.targetValue.lastIndexOf(" — ");
   const suffix = idx === -1 ? c.targetValue : c.targetValue.slice(idx + 3);
   return suffix.replace(/^1 products$/, "1 product");

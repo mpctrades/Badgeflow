@@ -42,7 +42,7 @@ export function claimWarning(presetId: string, text: string): string | null {
   // their own text ("TEST BADGE"), judge that text alone.
   const preset = BADGE_PRESETS.find((b) => b.id === presetId && b.label.toUpperCase() === upper);
   if (preset?.category === "Sale" || /SALE|%|OFF\b|CLEARANCE/.test(upper)) {
-    return "A sale badge only changes what shoppers see on the image — it doesn't create a Shopify discount. Set up the actual discount separately, and only show it while the offer is real.";
+    return "A fixed sale badge shows the same text on every product it targets, and it doesn't create a Shopify discount. Only show it while the offer is real — or switch to an Automatic sale badge, which shows each product's real discount and only appears on products that are on sale.";
   }
   if (preset?.id === "back-in-stock" || /STOCK|LAST UNITS|SELLING FAST/.test(upper)) {
     return "BadgeFlow doesn't check inventory. Only put stock badges on products where they're true, and end the campaign when they stop being true.";
@@ -81,6 +81,7 @@ export const TARGET_TYPES = [
   { value: "all", label: "All products" },
   { value: "collection", label: "Collection" },
   { value: "products", label: "Individual products" },
+  { value: "tag", label: "Products with a tag" },
 ] as const;
 
 // Text colour for a badge background. Must match textColor() in the
